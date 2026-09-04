@@ -1,0 +1,14 @@
+{
+  "id": "chat-tool-calls",
+  "title": "Chat Tool Call Visibility",
+  "description": "Expands collapsed tool-activity disclosures and keeps item detail rendering in ChatGPT conversation threads.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js"
+  },
+  "tweaks": {
+    "expandToolActivity": {
+      "enabled": true
+    }
+  }
+}
