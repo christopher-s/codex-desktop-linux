@@ -9,6 +9,9 @@
   "tweaks": {
     "expandToolActivity": {
       "enabled": true
+    },
+    "searchDomains": {
+      "enabled": true
     }
   }
 }

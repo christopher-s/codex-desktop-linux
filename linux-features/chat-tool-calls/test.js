@@ -24,7 +24,7 @@ function fixture(name) {
 }
 
 test("descriptor metadata is well-formed", () => {
-  assert.equal(descriptors.length, 1);
+  assert.equal(descriptors.length, 2);
   const d = descriptors[0];
   assert.equal(d.id, "expand-tool-activity");
   assert.equal(d.phase, "webview-asset");

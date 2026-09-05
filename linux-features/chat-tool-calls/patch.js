@@ -46,6 +46,8 @@ function expandToolActivityEnabled(context = {}) {
   return config.enabled !== false;
 }
 
+const searchDomains = require("./search-domains.js");
+
 function looksLikeDisclosureBundle(source) {
   return source.includes("`running`") && source.includes("`overflow-hidden`") &&
     /function \w+\(\)\{let \w+=\(0,\w\.c\)\(\d+\),\[/.test(source) &&
@@ -101,6 +103,7 @@ const descriptors = [
     skipDescription: "chat-tool-calls expand tool activity patch",
     apply: applyExpandToolActivityPatch,
   },
+  ...searchDomains.descriptors,
 ];
 
 module.exports = {
