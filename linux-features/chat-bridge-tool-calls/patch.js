@@ -107,6 +107,7 @@ function applyChatBridgeToolCallsPatch(source, context = {}) {
 const visibility = require("./visibility.js");
 const recap = require("./recap.js");
 const chip = require("./chip.js");
+const icon = require("./icon.js");
 
 const descriptors = [
   {
@@ -122,6 +123,7 @@ const descriptors = [
   ...visibility.descriptors,
   ...recap.descriptors,
   ...chip.descriptors,
+  ...icon.descriptors,
 ];
 
 module.exports = {

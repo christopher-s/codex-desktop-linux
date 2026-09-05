@@ -408,3 +408,51 @@ test("chip: idempotent and fail-soft", () => {
   assert.strictEqual(applyChatBridgeToolCallsChipPatch(other, {}), other);
   assert.strictEqual(applyChatBridgeToolCallsChipPatch(src, {settings: {showBridgeToolCalls: false}}), src);
 });
+
+// ---------------------------------------------------------------------------
+// Icon patch (chat-bridge-tool-calls-icon) — generic agent-activity icon
+// ---------------------------------------------------------------------------
+
+const {
+  applyChatBridgeToolCallsIconPatch,
+  ICON_ANCHOR,
+  NB_ANCHOR,
+} = require("./icon.js");
+
+test("icon: real-asset anchors match exactly once each", () => {
+  const assetPath = "/tmp/p5/webview/assets/subagent-activity-chip-group-a5079589a6b4.js";
+  if (!fs.existsSync(assetPath)) return;
+  const src = fs.readFileSync(assetPath, "utf8");
+  assert.strictEqual([...src.matchAll(new RegExp(ICON_ANCHOR.source, "g"))].length, 1, "icon anchor");
+  assert.strictEqual([...src.matchAll(new RegExp(NB_ANCHOR.source, "g"))].length, 1, "nb anchor");
+});
+
+test("icon: both conditions rewritten to include null namespace", () => {
+  const src = "rh(n)?.renderAgentActivityIcon?.(n)??(n.namespace===`codex_app`?(0,s_.jsx)(th,{\"aria-hidden\":!0,className:c_}):null);c=r.namespace===`codex_app`&&s!==`summary-text`";
+  const out = applyChatBridgeToolCallsIconPatch(src, {});
+  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsIconRuntimeA*/"), "marker A");
+  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsIconRuntimeB*/"), "marker B");
+  // site A condition eval: null namespace now takes the icon branch
+  const condA = "(n.namespace===`codex_app`||n.namespace==null)";
+  assert.ok(out.includes(condA), "A rewritten");
+  assert.ok(out.includes("(r.namespace===`codex_app`||r.namespace==null)"), "B rewritten");
+  // evaluate both gates
+  const fA = new Function("n", "return " + condA + ";");
+  assert.strictEqual(fA({namespace: null}), true, "null namespace gets icon");
+  assert.strictEqual(fA({namespace: "codex_app"}), true, "codex_app unchanged");
+  assert.strictEqual(fA({namespace: "other"}), false, "other namespaces unchanged");
+});
+
+test("icon: full patched source parses as a module", () => {
+  const src = "rh(n)?.renderAgentActivityIcon?.(n)??(n.namespace===`codex_app`?(0,s_.jsx)(th,{\"aria-hidden\":!0,className:c_}):null);c=r.namespace===`codex_app`&&s!==`summary-text`";
+  const out = applyChatBridgeToolCallsIconPatch(src, {});
+  new Function("rh", "n", "s_", "th", "c_", "r", "s", out + ";");
+});
+
+test("icon: idempotent and fail-soft", () => {
+  const src = "rh(n)?.renderAgentActivityIcon?.(n)??(n.namespace===`codex_app`?(0,s_.jsx)(th,{\"aria-hidden\":!0,className:c_}):null);c=r.namespace===`codex_app`&&s!==`summary-text`";
+  const once = applyChatBridgeToolCallsIconPatch(src, {});
+  assert.strictEqual(applyChatBridgeToolCallsIconPatch(once, {}), once);
+  assert.strictEqual(applyChatBridgeToolCallsIconPatch("let a=1;", {}), "let a=1;");
+  assert.strictEqual(applyChatBridgeToolCallsIconPatch(src, {settings: {showBridgeToolCalls: false}}), src);
+});
