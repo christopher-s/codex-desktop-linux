@@ -132,7 +132,12 @@ function applyChatBridgeToolCallsIconPatch(source, context = {}) {
     if (!out.includes(`/*${RUNTIME_MARKER}B*/`)) {
       const m = NB_ANCHOR.exec(out);
       if (!m) {
-        warn("Nb summary-text anchor not found; skipping site B");
+        if (/\(\w+\.namespace===`codex_app`\|\|\w+\.namespace==null\).*?!==`summary-text`/.test(out)) {
+          // chip.js may already have widened and refined this gate to suppress
+          // its card-owned row icon. Treat that as site B already satisfied.
+        } else {
+          warn("Nb summary-text anchor not found; skipping site B");
+        }
       } else {
         const r = m.groups.r;
         const original = `${r}.namespace===\`codex_app\`&&`;
@@ -144,6 +149,22 @@ function applyChatBridgeToolCallsIconPatch(source, context = {}) {
         } else {
           out = out.slice(0, at) + replacement + out.slice(at + original.length);
         }
+      }
+    }
+
+    // ---- Site C: custom native disclosure card icon (th -> gear) -------
+    // chip.js marks its card-owned icon so this patch can safely replace only
+    // that icon, leaving upstream uses of the themed `th` component alone.
+    if (out.includes("codexLinuxChatBridgeToolCallsCardIcon") && out.includes("__cbtcGear")) {
+      const ai = ASSET_ICON_ANCHOR.exec(out);
+      const cardIcon = /icon:\(0,(?<jsx>[\w$]+)\.jsx\)\((?<component>[\w$]+),\{className:`icon-xs shrink-0 text-secondary`,"data-codex-linux-chat-bridge-card-icon":`codexLinuxChatBridgeToolCallsCardIcon`\}\)/.exec(out);
+      if (!ai || !cardIcon) {
+        warn("marked disclosure card icon/asset component not found; keeping themed icon");
+      } else {
+        const replacement =
+          `icon:(0,${cardIcon.groups.jsx}.jsx)(${ai.groups.assetComp},{className:\`icon-xs shrink-0 text-secondary\`,` +
+          `"data-codex-linux-chat-bridge-card-icon":\`codexLinuxChatBridgeToolCallsCardIcon\`,asset:__cbtcGear})`;
+        out = out.slice(0, cardIcon.index) + replacement + out.slice(cardIcon.index + cardIcon[0].length);
       }
     }
 

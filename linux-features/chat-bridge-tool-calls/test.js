@@ -366,13 +366,16 @@ test("chip: structural anchors match the real native asset", () => {
   }
 });
 
-test("chip: real asset gains native Sc disclosure with fc and yh", () => {
+test("chip: real asset gains native Sc disclosure with a compact recursive argument tree", () => {
   const src = realChipAsset();
   const out = applyChatBridgeToolCallsChipPatch(src, {});
   assert.notStrictEqual(out, src);
   assert.ok(out.includes(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
   assert.match(out, /return\(0,[\w$]+\.jsx\)\(Sc,\{body:__cbtcBody,className:`relative overflow-clip`,disclosure:/);
-  assert.match(out, /__cbtcBody=\(0,[\w$]+\.jsx\)\(fc,\{children:\(0,[\w$]+\.jsx\)\(yh,/);
+  assert.match(out, /__cbtcBody=__cbtcOpen\?\(\(\)=>\{/);
+  assert.ok(out.includes("__cbtcWalk(r.arguments,null,0,`root`)"));
+  const injected = out.slice(out.indexOf("let __cbtcBody="), out.indexOf(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
+  assert.ok(!injected.includes("yh"), "shell renderer is not used");
 });
 
 test("chip: compact summary and Hermes prefix path stay unchanged", () => {
@@ -383,14 +386,60 @@ test("chip: compact summary and Hermes prefix path stay unchanged", () => {
   assert.ok(out.includes("if(s!==`row`)return y"), "non-row compact variants retained");
 });
 
-test("chip: expanded body emits all arguments as untruncated pretty JSON", () => {
+test("chip: native disclosure is emitted only for row variants", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
-  assert.ok(out.includes("JSON.stringify(r.arguments,null,2)"));
-  assert.ok(!out.includes("__cbtcR.length<2"));
-  assert.ok(!out.includes("slice(0,37)"));
-  assert.ok(!out.includes("session_id`&&"));
+  assert.match(out, /if\(s===`row`&&r\.namespace==null&&/);
+});
+
+test("chip: null-namespace Chat rows bypass the icon-only summary wrapper", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
+  assert.match(
+    out,
+    /if\(l===`row`&&i!==void 0&&o\.namespace!=null\)\{/,
+    "Chat bridge rows must reach Nb with variant=row so the disclosure body can mount",
+  );
+  assert.ok(
+    out.includes("variant:`summary-text`"),
+    "the native icon-only summary path remains available for non-Chat rows",
+  );
+});
+
+test("chip: collapsed rows do not mount the arguments body", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
+  assert.match(out, /__cbtcBody=__cbtcOpen\?/);
+  assert.match(out, /__cbtcWalk\(r\.arguments,null,0,`root`\)/);
+  const condition = out.indexOf("let __cbtcBody=__cbtcOpen?");
+  const entries = out.indexOf("__cbtcWalk(r.arguments", condition);
+  const closed = out.indexOf(":null;", entries);
+  assert.ok(condition >= 0 && entries > condition && closed > entries,
+    "argument row construction remains inside the expansion-only branch");
+});
+
+test("chip: expanded body renders a compact recursive code tree", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   const injected = out.slice(out.indexOf("let __cbtcBody="), out.indexOf(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
+  assert.ok(injected.includes("JSON.parse"), "JSON embedded in string values is parsed recursively");
+  assert.ok(injected.includes("__cbtcWalk"), "objects and arrays are traversed recursively");
+  assert.ok(injected.includes("paddingLeft:`${__cbtcDepth}rem`"), "tree depth controls indentation");
+  assert.ok(injected.includes("font-mono text-xs leading-4"), "the whole view uses compact code typography");
+  assert.ok(injected.includes("__cbtcK}:"), "keys are rendered without JSON quotes");
+  assert.ok(!injected.includes("grid-cols-["), "the wide key/value grid is removed");
+  assert.ok(!injected.includes("JSON.stringify"), "nested values are not dumped as raw JSON");
+  assert.ok(!injected.includes("command:"), "the shell-output renderer is not used");
+  assert.ok(!injected.includes("yh"), "the shell-output component is not used");
   assert.ok(!injected.includes("max-h-"));
+});
+
+test("chip: disclosure has one icon by suppressing the summary's nested icon on rows", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
+  assert.match(out, /s!==`summary-text`&&!\(s===`row`&&r\.namespace==null\)/);
+  const injected = out.slice(out.indexOf("let __cbtcBody="), out.indexOf(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
+  assert.strictEqual((injected.match(/icon:/g) || []).length, 1, "only the card icon is emitted");
+});
+
+test("chip: card icon carries a stable marker for the gear-icon patch", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
+  assert.ok(out.includes("codexLinuxChatBridgeToolCallsCardIcon"));
 });
 
 test("chip: transformed real asset passes node --check", () => {
@@ -427,20 +476,29 @@ test("icon: real-asset anchors match exactly once each", () => {
   assert.strictEqual([...src.matchAll(new RegExp(NB_ANCHOR.source, "g"))].length, 1, "nb anchor");
 });
 
-test("icon: both conditions rewritten to include null namespace", () => {
-  const src = "rh(n)?.renderAgentActivityIcon?.(n)??(n.namespace===`codex_app`?(0,s_.jsx)(th,{\"aria-hidden\":!0,className:c_}):null);c=r.namespace===`codex_app`&&s!==`summary-text`";
+test("icon: generic null-namespace fallback uses the gear asset", () => {
+  const src = "import{aa as x}from\"./app-primary-123abc.js\";" +
+    "(0,s_.jsx)($a,{className:`shrink-0 text-text/60`,asset:Fg});" +
+    "rh(n)?.renderAgentActivityIcon?.(n)??(n.namespace===`codex_app`?(0,s_.jsx)(th,{\"aria-hidden\":!0,className:c_}):null);" +
+    "c=r.namespace===`codex_app`&&s!==`summary-text`;";
   const out = applyChatBridgeToolCallsIconPatch(src, {});
+  assert.ok(out.includes("dh as __cbtcGear"), "gear asset imported");
+  assert.ok(out.includes("asset:__cbtcGear"), "gear asset rendered through the asset-icon component");
   assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsIconRuntimeA*/"), "marker A");
   assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsIconRuntimeB*/"), "marker B");
-  // site A condition eval: null namespace now takes the icon branch
   const condA = "(n.namespace===`codex_app`||n.namespace==null)";
   assert.ok(out.includes(condA), "A rewritten");
   assert.ok(out.includes("(r.namespace===`codex_app`||r.namespace==null)"), "B rewritten");
-  // evaluate both gates
-  const fA = new Function("n", "return " + condA + ";");
-  assert.strictEqual(fA({namespace: null}), true, "null namespace gets icon");
-  assert.strictEqual(fA({namespace: "codex_app"}), true, "codex_app unchanged");
-  assert.strictEqual(fA({namespace: "other"}), false, "other namespaces unchanged");
+});
+
+test("icon: native disclosure card icon is replaced with the gear asset", () => {
+  const src = "import{aa as x}from\"./app-primary-123abc.js\";" +
+    "(0,s_.jsx)($a,{className:`shrink-0 text-text/60`,asset:Fg});" +
+    "rh(n)?.renderAgentActivityIcon?.(n)??(n.namespace===`codex_app`?(0,s_.jsx)(th,{\"aria-hidden\":!0,className:c_}):null);" +
+    "c=r.namespace===`codex_app`&&s!==`summary-text`;" +
+    "icon:(0,s_.jsx)(th,{className:`icon-xs shrink-0 text-secondary`,\"data-codex-linux-chat-bridge-card-icon\":`codexLinuxChatBridgeToolCallsCardIcon`})";
+  const out = applyChatBridgeToolCallsIconPatch(src, {});
+  assert.ok(out.includes("icon:(0,s_.jsx)($a,{className:`icon-xs shrink-0 text-secondary`,\"data-codex-linux-chat-bridge-card-icon\":`codexLinuxChatBridgeToolCallsCardIcon`,asset:__cbtcGear})"));
 });
 
 test("icon: full patched source parses as a module", () => {
