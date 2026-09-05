@@ -104,6 +104,10 @@ function applyChatBridgeToolCallsPatch(source, context = {}) {
   }
 }
 
+const visibility = require("./visibility.js");
+const recap = require("./recap.js");
+const chip = require("./chip.js");
+
 const descriptors = [
   {
     id: "chat-bridge-tool-calls",
@@ -115,6 +119,9 @@ const descriptors = [
     skipDescription: "chat-bridge-tool-calls classifier patch",
     apply: applyChatBridgeToolCallsPatch,
   },
+  ...visibility.descriptors,
+  ...recap.descriptors,
+  ...chip.descriptors,
 ];
 
 module.exports = {
@@ -124,4 +131,6 @@ module.exports = {
   applyChatBridgeToolCallsPatch,
   descriptors,
   showBridgeToolCallsEnabled,
+  visibilityDescriptors: visibility.descriptors,
+  applyChatBridgeToolCallsVisibilityPatch: visibility.applyChatBridgeToolCallsVisibilityPatch,
 };

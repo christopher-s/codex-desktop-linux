@@ -146,3 +146,265 @@ test("real-asset apply (skipped when extracted tree absent)", () => {
     assert.equal(applyChatBridgeToolCallsPatch(out, {}), out); // idempotent on real asset
   }
 });
+
+// ---------------------------------------------------------------------------
+// Visibility patch (chat-bridge-tool-calls-visibility)
+// ---------------------------------------------------------------------------
+
+const {
+  applyChatBridgeToolCallsVisibilityPatch,
+  DROP_GUARD_ANCHOR,
+} = require("./patch.js").__testVisibility
+  ? require("./patch.js").__testVisibility
+  : (() => {
+      // patch.js re-exports visibility functions for tests
+      const p = require("./patch.js");
+      return {
+        applyChatBridgeToolCallsVisibilityPatch:
+          p.applyChatBridgeToolCallsVisibilityPatch,
+        DROP_GUARD_ANCHOR: require("./visibility.js").DROP_GUARD_ANCHOR,
+      };
+    })();
+
+test("visibility: real-asset drop-guard anchor matches exactly once", () => {
+  const assetPath =
+    "/tmp/installed-check/webview/assets/app-initial-c89bb5bd3099.js";
+  if (!fs.existsSync(assetPath)) return; // skip when probe dir absent
+  const src = fs.readFileSync(assetPath, "utf8");
+  const all = [...src.matchAll(new RegExp(DROP_GUARD_ANCHOR.source, "g"))];
+  assert.strictEqual(all.length, 1);
+});
+
+test("visibility: patch keeps hidden group carrying dynamic-tool-call items", () => {
+  // Shape lifted from the real asset (identifier names as minified):
+  // let i=n.flatMap((e,t)=>{if(e.isVisuallyHiddenReasoningGroup===!0)return[];if(!xz(e))return[e];...});
+  const src =
+    "let i=n.flatMap((e,t)=>{if(e.isVisuallyHiddenReasoningGroup===!0)return[];if(!xz(e))return[e];let n=t!==r,i=-1;return[e];});";
+  const out = applyChatBridgeToolCallsVisibilityPatch(src, {});
+  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsVisRuntime*/"), "marker present");
+  assert.ok(out.includes("some(function(it){return it&&it.type===`dynamic-tool-call`})"), "escape hatch inserted");
+  // sanity: evaluate the patched flatMap body with stubs — hidden group WITH tool item kept
+  const entries = [
+    { isVisuallyHiddenReasoningGroup: true, item: { type: "chatgpt-reasoning-group", items: [{ type: "dynamic-tool-call", completed: true }] } },
+    { isVisuallyHiddenReasoningGroup: true, item: { type: "chatgpt-reasoning-group", items: [{ type: "reasoning" }] } },
+    { isVisuallyHiddenReasoningGroup: false, item: { type: "assistant-message" } },
+  ];
+  const xz = (e) => e?.item?.type === "chatgpt-reasoning-group";
+  const body = out.slice(out.indexOf("flatMap((e,t)=>{") + "flatMap((e,t)=>{".length, out.lastIndexOf("});"));
+  // reconstruct: run via Function with the inserted code as-is
+  const fn = new Function("e", "t", "xz", "r", body.replace(/^if\(e\.isVisuallyHiddenReasoningGroup===!0\)return\[\];/, "") + ";return null;");
+  const kept = entries.filter((en) => {
+    const res = fn(en, 0, xz, -1);
+    return res !== undefined && res !== null ? Array.isArray(res) ? res.length > 0 : true : true;
+  });
+  // group WITH dynamic-tool-call must survive; plain hidden reasoning group dropped
+  assert.ok(kept.some((k) => k === entries[0]), "hidden group with tool items kept");
+  assert.ok(!kept.some((k) => k === entries[1]), "hidden group without tool items dropped");
+});
+
+test("visibility: idempotent (second apply is no-op)", () => {
+  const src =
+    "let i=n.flatMap((e,t)=>{if(e.isVisuallyHiddenReasoningGroup===!0)return[];if(!xz(e))return[e];return[e];});";
+  const once = applyChatBridgeToolCallsVisibilityPatch(src, {});
+  const twice = applyChatBridgeToolCallsVisibilityPatch(once, {});
+  assert.strictEqual(twice, once);
+});
+
+test("visibility: anchor miss returns source unchanged (fail-soft)", () => {
+  const src = "let i=n.flatMap((e,t)=>{if(e.foo)return[];return[e];});";
+  assert.strictEqual(applyChatBridgeToolCallsVisibilityPatch(src, {}), src);
+});
+
+test("visibility: settings toggle disables the patch", () => {
+  const src =
+    "let i=n.flatMap((e,t)=>{if(e.isVisuallyHiddenReasoningGroup===!0)return[];if(!xz(e))return[e];return[e];});";
+  assert.strictEqual(
+    applyChatBridgeToolCallsVisibilityPatch(src, { settings: { showBridgeToolCalls: false } }),
+    src,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Recap patch (chat-bridge-tool-calls-recap) — viewer render gate
+// ---------------------------------------------------------------------------
+
+const {
+  applyChatBridgeToolCallsRecapPatch,
+  RECAP_GATE_ANCHOR,
+} = require("./recap.js");
+
+test("recap: real-asset viewer gate anchor matches exactly once", () => {
+  const candidates = [
+    "/tmp/payload-check2/webview/assets/viewer-b286e659c89a.js",
+  ];
+  const existing = candidates.filter((p) => fs.existsSync(p));
+  if (!existing.length) return; // skip when probe dirs absent
+  for (const assetPath of existing) {
+    const src = fs.readFileSync(assetPath, "utf8");
+    const all = [...src.matchAll(new RegExp(RECAP_GATE_ANCHOR.source, "g"))];
+    assert.strictEqual(all.length, 1, `anchor count in ${assetPath}`);
+  }
+});
+
+test("recap: gate condition rewritten to keep tool-carrying groups", () => {
+  // Shape lifted from viewer-b286e659c89a.js:
+  // Ve=S.items.flatMap((e,t)=>e.type===`chatgpt-reasoning-group`?t!==Ce||pe?.type===`hide_all`?[]:[{key:`reasoning`}]:[e])
+  const src =
+    "Ve=S.items.flatMap((e,t)=>e.type===`chatgpt-reasoning-group`?t!==Ce||pe?.type===`hide_all`?[]:[{key:`reasoning`}]:[e]);";
+  const out = applyChatBridgeToolCallsRecapPatch(src, {});
+  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsRecapRuntime*/"), "marker present");
+  // evaluate the rewritten ternary for the two decisive cases
+  const ce = 1; // group at index 1
+  const mkGroup = (types) => ({ type: "chatgpt-reasoning-group", items: types.map((ty) => ({ type: ty })) });
+  const cases = [
+    { pe: { type: "hide_all" }, e: mkGroup(["dynamic-tool-call"]), expect: "keep" },
+    { pe: { type: "hide_all" }, e: mkGroup(["reasoning"]), expect: "drop" },
+    { pe: null, e: mkGroup(["reasoning"]), expect: "keep" },
+    { pe: { type: "collapse" }, e: mkGroup(["reasoning"]), expect: "keep" },
+  ];
+  const cond = out.slice(out.indexOf("t!==Ce||("), out.lastIndexOf(")/*codexLinuxChatBridgeToolCallsRecapRuntime*/") + 1);
+  const fn = new Function("t", "Ce", "pe", "e", "return (" + cond + ");");
+  for (const c of cases) {
+    const drops = fn(1, ce, c.pe, c.e);
+    assert.strictEqual(drops, c.expect === "drop", `case pe=${JSON.stringify(c.pe && c.pe.type)} items=${JSON.stringify(c.e.items.map((i) => i.type))}`);
+  }
+});
+
+test("recap: non-group entries untouched (condition still drops t!==Ce)", () => {
+  const src =
+    "Ve=S.items.flatMap((e,t)=>e.type===`chatgpt-reasoning-group`?t!==Ce||pe?.type===`hide_all`?[]:[{key:`reasoning`}]:[e]);";
+  const out = applyChatBridgeToolCallsRecapPatch(src, {});
+  const cond = out.slice(out.indexOf("t!==Ce||("), out.lastIndexOf(")/*codexLinuxChatBridgeToolCallsRecapRuntime*/") + 1);
+  const fn = new Function("t", "Ce", "pe", "e", "return (" + cond + ");");
+  // group at wrong index: dropped regardless of contents
+  assert.strictEqual(fn(0, 1, { type: "hide_all" }, { type: "chatgpt-reasoning-group", items: [{ type: "dynamic-tool-call" }] }), true);
+});
+
+test("recap: idempotent (second apply is no-op)", () => {
+  const src =
+    "Ve=S.items.flatMap((e,t)=>e.type===`chatgpt-reasoning-group`?t!==Ce||pe?.type===`hide_all`?[]:[{key:`reasoning`}]:[e]);";
+  const once = applyChatBridgeToolCallsRecapPatch(src, {});
+  assert.strictEqual(applyChatBridgeToolCallsRecapPatch(once, {}), once);
+});
+
+test("recap: anchor miss returns source unchanged (fail-soft)", () => {
+  const src = "Ve=S.items.flatMap((e,t)=>e.type===`other`?[e]:[e]);";
+  assert.strictEqual(applyChatBridgeToolCallsRecapPatch(src, {}), src);
+});
+
+test("recap: settings toggle disables the patch", () => {
+  const src =
+    "Ve=S.items.flatMap((e,t)=>e.type===`chatgpt-reasoning-group`?t!==Ce||pe?.type===`hide_all`?[]:[{key:`reasoning`}]:[e]);";
+  assert.strictEqual(
+    applyChatBridgeToolCallsRecapPatch(src, { settings: { showBridgeToolCalls: false } }),
+    src,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Recap patch gate 3b (Km component null-render)
+// ---------------------------------------------------------------------------
+
+test("recap Km: null-render rewritten to keep tool-carrying groups", () => {
+  const src = "function Km(e){let t=(0,ih.c)(10);if(e.reasoningRecap?.type===`hide_all`)return null;let n,r;}";
+  const out = applyChatBridgeToolCallsRecapPatch(src, {});
+  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsKmRuntime*/"), "km marker present");
+  // evaluate: hide_all + tool items => NO null (proceed); hide_all + no tools => null
+  const at = out.indexOf("if(e.reasoningRecap?.type===`hide_all`&&");
+  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsKmRuntime*/;");
+  const ifOpen = out.indexOf("(", at);
+  let depth = 0, i = ifOpen;
+  for (; i < out.length; i++) {
+    if (out[i] === "(") depth++;
+    else if (out[i] === ")") { depth--; if (depth === 0) break; }
+  }
+  const cond = out.slice(at + 3, i);
+  const fn = new Function("e", "return (" + cond + ");");
+  assert.strictEqual(fn({reasoningRecap: {type: "hide_all"}, items: [{type: "dynamic-tool-call"}]}), false, "hide_all+tools => renders");
+  assert.strictEqual(fn({reasoningRecap: {type: "hide_all"}, items: [{type: "reasoning"}]}), true, "hide_all+no-tools => null");
+  assert.strictEqual(fn({reasoningRecap: null, items: [{type: "reasoning"}]}), false, "no recap => renders");
+});
+
+test("recap Km: idempotent with gate 3a present", () => {
+  const src = "function Km(e){let t=(0,ih.c)(10);if(e.reasoningRecap?.type===`hide_all`)return null;let n,r;}";
+  const once = applyChatBridgeToolCallsRecapPatch(src, {});
+  const twice = applyChatBridgeToolCallsRecapPatch(once, {});
+  assert.strictEqual(twice, once);
+});
+
+test("recap Km: real-asset anchor present in viewer", () => {
+  const assetPath = "/tmp/payload-check3/webview/assets/viewer-b286e659c89a.js";
+  if (!fs.existsSync(assetPath)) return;
+  const src = fs.readFileSync(assetPath, "utf8");
+  const km = /function (?<fn>\w+)\((?<p>\w+)\)\{let \w+=\(0,\w+\.c\)\(\d+\);if\(\k<p>\.reasoningRecap\?\.type===`hide_all`\)return null;/.exec(src);
+  assert.ok(km, "Km anchor in real viewer asset");
+});
+
+// ---------------------------------------------------------------------------
+// Chip patch (chat-bridge-tool-calls-chip) — generic label enrichment
+// ---------------------------------------------------------------------------
+
+const {
+  applyChatBridgeToolCallsChipPatch,
+  LABEL_ANCHOR,
+} = require("./chip.js");
+
+test("chip: real-asset Pb anchor matches exactly once", () => {
+  const assetPath = "/tmp/payload-check4/webview/assets/subagent-activity-chip-group-a5079589a6b4.js";
+  if (!fs.existsSync(assetPath)) return;
+  const src = fs.readFileSync(assetPath, "utf8");
+  const all = [...src.matchAll(new RegExp(LABEL_ANCHOR.source, "g"))];
+  assert.strictEqual(all.length, 1, "anchor count");
+});
+
+test("chip: unregistered tool with object arguments gets summary appended", () => {
+  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+  const out = applyChatBridgeToolCallsChipPatch(src, {});
+  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsChipRuntime*/"), "marker present");
+  // evaluate the inserted block: label gains 'key: value' summary
+  const at = out.indexOf("try{if(zb[e.tool]==null");
+  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsChipRuntime*/");
+  const block = out.slice(at, end);
+  const e = {completed: true, tool: "hermes_run_command", arguments: {session_id: "s1", request_id: "r1", command: "echo hi there friend", background: false}};
+  const zb = {}, Bb = {};
+  let n = "hermes run command";
+  const fn = new Function("e", "zb", "Bb", "n", block + ";return n;");
+  const result = fn(e, zb, Bb, n);
+  assert.ok(result.includes("command: echo hi there friend"), "summary includes command: " + result);
+  assert.ok(!result.includes("session_id"), "bookkeeping field skipped: " + result);
+});
+
+test("chip: registered-tool labels untouched", () => {
+  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+  const out = applyChatBridgeToolCallsChipPatch(src, {});
+  const at = out.indexOf("try{if(zb[e.tool]==null");
+  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsChipRuntime*/");
+  const block = out.slice(at, end);
+  const e = {completed: true, tool: "automation_update", arguments: {a: 1}};
+  const zb = {automation_update: "scheduled task updated"}, Bb = {};
+  let n = "scheduled task updated";
+  const fn = new Function("e", "zb", "Bb", "n", block + ";return n;");
+  assert.strictEqual(fn(e, zb, Bb, n), "scheduled task updated", "no summary for labeled tools");
+});
+
+test("chip: string/array arguments leave label unchanged", () => {
+  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+  const out = applyChatBridgeToolCallsChipPatch(src, {});
+  const at = out.indexOf("try{if(zb[e.tool]==null");
+  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsChipRuntime*/");
+  const block = out.slice(at, end);
+  let n = "some tool";
+  const fn = new Function("e", "zb", "Bb", "n", block + ";return n;");
+  assert.strictEqual(fn({completed: true, tool: "t", arguments: "plain string"}, {}, {}, n), "some tool");
+  assert.strictEqual(fn({completed: true, tool: "t", arguments: ["arr"]}, {}, {}, n), "some tool");
+  assert.strictEqual(fn({completed: true, tool: "t", arguments: {}}, {}, {}, n), "some tool", "empty object -> no summary");
+});
+
+test("chip: idempotent and fail-soft", () => {
+  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+  const once = applyChatBridgeToolCallsChipPatch(src, {});
+  assert.strictEqual(applyChatBridgeToolCallsChipPatch(once, {}), once);
+  const other = "let a=1;";
+  assert.strictEqual(applyChatBridgeToolCallsChipPatch(other, {}), other);
+  assert.strictEqual(applyChatBridgeToolCallsChipPatch(src, {settings: {showBridgeToolCalls: false}}), src);
+});
