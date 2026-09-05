@@ -1,0 +1,10 @@
+{
+  "id": "chat-bridge-tool-calls",
+  "name": "Chat bridge tool calls",
+  "version": "1.0.0",
+  "description": "Render custom-GPT Actions (jit_plugin) tool-call messages as dynamic-tool-call items in Chat threads, showing action name and arguments instead of dropping them.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js"
+  }
+}
