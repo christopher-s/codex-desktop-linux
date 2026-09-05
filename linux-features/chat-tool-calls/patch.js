@@ -48,6 +48,7 @@ function expandToolActivityEnabled(context = {}) {
 
 const searchDomains = require("./search-domains.js");
 const chatSearchRows = require("./chat-search-rows.js");
+const toolDetails = require("./tool-details.js");
 
 function looksLikeDisclosureBundle(source) {
   return source.includes("`running`") && source.includes("`overflow-hidden`") &&
@@ -105,6 +106,7 @@ const descriptors = [
     apply: applyExpandToolActivityPatch,
   },
   ...chatSearchRows.descriptors,
+  ...toolDetails.descriptors,
   ...searchDomains.descriptors,
 ];
 
