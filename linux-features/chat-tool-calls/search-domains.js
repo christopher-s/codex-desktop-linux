@@ -87,12 +87,18 @@ function applySearchDomainsPatch(source, context = {}) {
     }
     const { n, d, mid, f, p, td, na } = m.groups;
 
-    // body expression: muted wrapped domain list, plain text (no links).
+    // Chat search reasoning items retain one favicon URL per searched domain,
+    // but no query strings or exact result URLs. Render each retained domain as
+    // its own disclosure row. The `presentation` + `toolIcons` path is specific
+    // to Chat reasoning items; Codex `web-search` items use another renderer.
     const bodyExpr =
       "(((" + n + ".toolIcons)||[]).some(function(u){return typeof u===\"string\"&&u.indexOf(\"domain=\")>=0})" +
-      "?(0," + td + ".jsx)(`div`,{className:`flex flex-wrap gap-x-3 gap-y-0.5 pt-1 pl-0.5 text-xs text-text/60`," +
+      "?(0," + td + ".jsx)(`div`,{className:`flex flex-col gap-1 pt-1.5 pl-0.5 text-xs text-text/60`," +
       "children:(" + n + ".toolIcons||[]).map(function(u,ci){var cm=/domain=([^&]+)/.exec(u);" +
-      "return cm?(0," + td + ".jsx)(`span`,{children:cm[1]},cm[1]+\"-\"+String(ci)):null})})" +
+      "if(!cm)return null;var ch;try{ch=decodeURIComponent(cm[1])}catch(ce){ch=cm[1]}" +
+      "return (0," + td + ".jsxs)(`div`,{className:`flex min-w-0 items-start gap-2`,children:[" +
+      "(0," + td + ".jsx)(`span`,{className:`mt-[0.15rem] shrink-0 text-[9px] leading-none text-text/40`,\"aria-hidden\":true,children:`●`})," +
+      "(0," + td + ".jsx)(`span`,{className:`min-w-0 break-all`,children:ch})]},ch+\"-\"+String(ci))})})" +
       ":void 0)";
 
     const original = m[0];

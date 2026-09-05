@@ -48,14 +48,17 @@ test("asset pattern matches viewer bundle only", () => {
   assert.ok(!ASSET_PATTERN.test("subagent-activity-chip-group-a5079589a6b4.js"));
 });
 
-test("patch injects the body slot with domain extraction", () => {
+test("patch injects an individual Chat disclosure row per retained domain", () => {
   const src = fixture();
   assert.ok(looksLikeViewerBundle(src));
   const out = applySearchDomainsPatch(src, {});
   assert.notEqual(out, src);
   assert.ok(out.includes(",body:"));
+  assert.ok(out.includes("flex flex-col gap-1"));
+  assert.ok(out.includes("decodeURIComponent"));
+  assert.ok(out.includes("break-all"));
   assert.ok(out.includes("/*" + RUNTIME_MARKER + "*/"));
-  // guard preserved
+  // Chat reasoning guard preserved. Codex web-search items use another path.
   assert.ok(out.includes("||n.toolIcons==null||n.toolIcons.length===0)return u;"));
   // memo for p dropped (recompute each render)
   assert.ok(!out.includes("t[12]!==u||t[13]!==f"));
