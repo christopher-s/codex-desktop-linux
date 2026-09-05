@@ -12,6 +12,9 @@
     },
     "searchDomains": {
       "enabled": true
+    },
+    "chatSearchRows": {
+      "enabled": true
     }
   }
 }

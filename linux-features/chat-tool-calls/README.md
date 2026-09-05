@@ -19,6 +19,20 @@ Patches `tool-activity-disclosure-*.js` so the widget renders expanded by
 default (`defaultExpanded` capture rewritten to `true`). Manual collapse still
 works; running-state auto-expand behavior is unchanged.
 
+It also applies a two-stage, Chat-only search rewrite:
+
+- `app-initial-*.js` expands complete Chat search-query arrays into one tagged
+  `web-search` activity item per query.
+- `viewer-*.js` admits only those explicitly tagged Chat items. Untagged Codex
+  items remain suppressed in this shared path, and Work items retain their
+  existing `chatGptWorkActivityId` behavior.
+
+The existing searched-domain rows remain unchanged. Exact cited URLs are not
+shown: the current structural patch cannot safely propagate turn-level final
+answer references without a substantially broader normalization rewrite, and
+the payload exposes no query-to-URL mapping. The feature never labels domains
+or URLs as per-query results.
+
 ## Settings
 
 ```json
@@ -26,7 +40,9 @@ works; running-state auto-expand behavior is unchanged.
   "enabled": ["chat-tool-calls"],
   "settings": {
     "tweaks": {
-      "expandToolActivity": { "enabled": true }
+      "expandToolActivity": { "enabled": true },
+      "searchDomains": { "enabled": true },
+      "chatSearchRows": { "enabled": true }
     }
   }
 }
