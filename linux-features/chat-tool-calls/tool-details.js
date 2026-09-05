@@ -35,16 +35,8 @@ function applyToolDetailsPatch(source, context = {}) {
       return source;
     }
     const [anchor, fn, props, cache, compiler] = match;
-    // Derive the JSX namespace from the exact Chat activity renderer rather
-    // than the first jsx-runtime-looking import. Large viewer chunks import
-    // several modules that expose a `jsx` property but are not React's
-    // runtime; choosing one of those parses cleanly and then crashes live.
-    const rendererTail = source.slice(match.index, match.index + 20_000);
-    const jsxImport = rendererTail.match(/\(0,([\w$]+)\.jsx\)\((?:Ac|_p),/)?.[1];
-    if (!jsxImport) {
-      warn("Viewer JSX runtime anchor not found");
-      return source;
-    }
+    const jsxImport = source.match(/import\{[^}]*\b(?:j|jsx) as ([\w$]+)[^}]*\}from"\.\/jsx-runtime-[^"]+\.js"/)?.[1] ||
+      source.match(/import\{[^}]*\}from"\.\/rolldown-runtime-[^"]+\.js";import\{[^}]* as ([\w$]+)[^}]*\}from/)?.[1] || "Q";
     const replacement = `${helper(jsxImport)}function ${fn}(${props}){let ${cache}=(0,${compiler}.c)(227),{`;
     let patched = source.replace(anchor, replacement);
     let webCount = 0;

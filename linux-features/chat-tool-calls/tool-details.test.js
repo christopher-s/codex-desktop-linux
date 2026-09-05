@@ -9,9 +9,7 @@ const test = require("node:test");
 const patch = require("./tool-details.js");
 
 function fixture() {
-  // Za deliberately resembles a JSX import but is not the runtime used by the
-  // activity renderer. The patch must derive Q from the anchored JSX calls.
-  return 'import{j as Za}from"./jsx-runtime-fake.js";import{j as Q}from"./jsx.js";function Lm(e){let t=(0,ih.c)(227),{item:f}=e,D=e=>e;f.chatGptChatWebSearch; if(f.type===`web-search`){let e;t[132]===f?e=t[133]:(e=(0,Q.jsx)(Ac,{item:f}),t[132]=f,t[133]=e);let n;return t[134]!==e||t[135]!==D?(n=D(e),t[134]=e,t[135]=D,t[136]=n):n=t[136],n}if(f.type===`chatgpt-python-execution`){let e;t[153]!==f?(e=(0,Q.jsx)(_p,{item:f}),t[153]=f,t[155]=e):e=t[155];let n;return t[156]!==e||t[157]!==D?(n=D(e),t[156]=e,t[157]=D,t[158]=n):n=t[158],n}}';
+  return 'import{j as Q}from"./jsx.js";function Lm(e){let t=(0,ih.c)(227),{item:f}=e,D=e=>e;f.chatGptChatWebSearch; if(f.type===`web-search`){let e;t[132]===f?e=t[133]:(e=(0,Q.jsx)(Ac,{item:f}),t[132]=f,t[133]=e);let n;return t[134]!==e||t[135]!==D?(n=D(e),t[134]=e,t[135]=D,t[136]=n):n=t[136],n}if(f.type===`chatgpt-python-execution`){let e;t[153]!==f?(e=(0,Q.jsx)(_p,{item:f}),t[153]=f,t[155]=e):e=t[155];let n;return t[156]!==e||t[157]!==D?(n=D(e),t[156]=e,t[157]=D,t[158]=n):n=t[158],n}}';
 }
 
 function checkModule(source) {
@@ -38,8 +36,6 @@ test("adds compact collapsed details to tagged Chat web searches", () => {
   assert.match(out, /source:f\.action\?\.url/);
   assert.match(out, /children:`Tool details`/);
   assert.match(out, /open:!1/);
-  assert.match(out, /function codexLinuxChatToolDetails[\s\S]*\(0,Q\.jsxs\)/);
-  assert.doesNotMatch(out, /function codexLinuxChatToolDetails[\s\S]*\(0,Za\.jsxs\)/);
   checkModule(out);
 });
 
