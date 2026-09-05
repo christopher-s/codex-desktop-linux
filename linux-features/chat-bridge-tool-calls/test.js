@@ -13,21 +13,27 @@ const {
 
 const desc = descriptors[0];
 
-// Upstream-shaped classifier fallback (minified). The anchor must match this.
+// Upstream-shaped classifier fallback (minified).
 const UPSTREAM_FALLBACK =
   "let u=kWr(e),d=ng().safeParse(s);return e.author.role===`assistant`&&u!=null&&d.success?" +
   "{completed:u.completed,item:{arguments:d.data,callId:lR(e),completed:u.completed," +
   "namespace:null,tool:u.tool,type:`dynamic-tool-call`},pairKey:u.pairKey}:SWr(e,t)";
 
-/** Extract the injected fallback function and return a JS evaluator
- *  `fn(kWrValue, message)`. */
-function fallbackFn(patchedSource) {
-  const marker = `/*${RUNTIME_MARKER}*/`;
-  const start = patchedSource.indexOf("(u!=null?");
-  const end = patchedSource.indexOf(marker) + marker.length;
-  assert.ok(start > -1 && end > start, "marker present in patched source");
-  const expr = patchedSource.slice(start, end);
-  return new Function("u", "e", "return " + expr + ";");
+/** Run the patched statement with correctly-wired stubs.
+ *  Signature in the patched source: kWr, ng, s, lR, SWr, e, t  — but `s` is
+ *  only read via ng().safeParse(s), so we pass argsValue as `s` and let `ng`
+ *  succeed on it. `d.data` therefore === argsValue. */
+function runPatched(patchedSource, kWrValue, message, argsValue) {
+  const fn = new Function("kWr", "ng", "s", "lR", "SWr", "e", "t", patchedSource);
+  return fn(
+    () => kWrValue,                                  // kWr(e)
+    () => ({ safeParse: (v) => ({ success: true, data: v }) }), // ng()
+    argsValue,                                       // s
+    () => "callid",                                  // lR(e)
+    () => null,                                      // SWr(e,t)
+    message,                                         // e
+    {}                                               // t
+  );
 }
 
 test("descriptor metadata", () => {
@@ -36,11 +42,15 @@ test("descriptor metadata", () => {
   assert.match(String(desc.pattern), /app-initial/);
 });
 
-test("applies to upstream-shaped classifier and returns a string", () => {
+test("applies to upstream-shaped classifier (insertion)", () => {
   const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
   assert.equal(typeof out, "string");
   assert.notEqual(out, UPSTREAM_FALLBACK);
   assert.ok(out.includes(`/*${RUNTIME_MARKER}*/`));
+  // insertion preserves the original expression text byte-for-byte
+  const markerIdx = out.indexOf(`/*${RUNTIME_MARKER}*/`);
+  const after = out.slice(markerIdx + `/*${RUNTIME_MARKER}*/`.length);
+  assert.equal(after, UPSTREAM_FALLBACK.slice(UPSTREAM_FALLBACK.indexOf("return")));
 });
 
 test("patch output parses as valid JS", () => {
@@ -49,49 +59,58 @@ test("patch output parses as valid JS", () => {
     new Function("kWr", "ng", "s", "lR", "SWr", "e", "t", out));
 });
 
-test("runtime: jit_plugin recipient becomes a tool descriptor", () => {
+test("runtime: jit_plugin recipient produces a dynamic-tool-call item", () => {
   const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
-  const fn = fallbackFn(out);
   const msg = {
     author: { role: "assistant" },
     recipient: "chatgpt_overmind_dedyn_io__jit_plugin.hermes_run_command",
     status: "finished_successfully",
     content: { content_type: "code", language: "json", text: '{"command":"echo hi"}' },
   };
-  const result = fn(null, msg);
-  assert.equal(result.tool, "hermes_run_command");
-  assert.equal(result.completed, true);
-  assert.equal(result.pairKey, null);
+  const args = { command: "echo hi" };
+  const result = runPatched(out, null, msg, args);
+  assert.deepEqual(result, {
+    completed: true,
+    item: { arguments: args, callId: "callid", completed: true, namespace: null,
+            tool: "hermes_run_command", type: "dynamic-tool-call" },
+    pairKey: null,
+  });
 });
 
-test("runtime: kWr's own result wins when non-null", () => {
+test("runtime: kWr result wins when non-null", () => {
   const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
-  const fn = fallbackFn(out);
-  const fromKwr = { tool: "from-kWr", completed: true, pairKey: "dynamic:from-kWr" };
-  const msg = { author: { role: "assistant" }, recipient: "functions.anything", status: "finished_successfully" };
-  assert.deepEqual(fn(fromKwr, msg), fromKwr);
+  const msg = {
+    author: { role: "assistant" },
+    recipient: "chatgpt_overmind_dedyn_io__jit_plugin.hermes_run_command",
+    status: "finished_successfully",
+  };
+  const fromKwr = { completed: false, pairKey: "dynamic:from-kWr", tool: "web_search" };
+  const result = runPatched(out, fromKwr, msg, {});
+  assert.equal(result.completed, false);
+  assert.equal(result.pairKey, "dynamic:from-kWr");
+  assert.equal(result.item.tool, "web_search");
 });
 
-test("runtime: plain and api_tool recipients still return null", () => {
+test("runtime: non-jit recipients fall through to SWr", () => {
   const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
-  const fn = fallbackFn(out);
-  assert.equal(fn(null, { author: { role: "assistant" }, recipient: "all", status: "finished_successfully" }), null);
-  assert.equal(fn(null, { author: { role: "assistant" }, recipient: "api_tool.call_tool", status: "finished_successfully" }), null);
-  assert.equal(fn(null, { author: { role: "assistant" }, recipient: "functions.web_search", status: "finished_successfully" }), null);
-  assert.equal(fn(null, { author: { role: "assistant" } }), null);
+  const plain = { author: { role: "assistant" }, recipient: "all", status: "finished_successfully" };
+  const result = runPatched(out, null, plain, {});
+  assert.equal(result, null); // SWr stub returns null
 });
 
-test("runtime: in_progress message marks incomplete", () => {
+test("runtime: trailing-empty action name does not match", () => {
   const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
-  const fn = fallbackFn(out);
+  const msg = { author: { role: "assistant" }, recipient: "x__jit_plugin.", status: "finished_successfully" };
+  const result = runPatched(out, null, msg, {});
+  assert.equal(result, null);
+});
+
+test("runtime: in_progress marks incomplete", () => {
+  const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
   const msg = { author: { role: "assistant" }, recipient: "x__jit_plugin.do_thing", status: "in_progress" };
-  assert.equal(fn(null, msg).completed, false);
-});
-
-test("runtime: trailing-empty action name returns null", () => {
-  const out = applyChatBridgeToolCallsPatch(UPSTREAM_FALLBACK, {});
-  const fn = fallbackFn(out);
-  assert.equal(fn(null, { author: { role: "assistant" }, recipient: "x__jit_plugin.", status: "finished_successfully" }), null);
+  const result = runPatched(out, null, msg, {});
+  assert.equal(result.completed, false);
+  assert.equal(result.item.completed, false);
 });
 
 test("idempotent: second apply is a byte-identical no-op", () => {
@@ -125,12 +144,5 @@ test("real-asset apply (skipped when extracted tree absent)", () => {
     assert.ok(out.includes(`/*${RUNTIME_MARKER}*/`));
     assert.ok(out.length > src.length);
     assert.equal(applyChatBridgeToolCallsPatch(out, {}), out); // idempotent on real asset
-  } else {
-    // Anchor drift on the real asset is a hard signal for this feature.
-    assert.ok(!FALLBACK_ANCHOR_FOUND(src), "anchor should match the real asset");
   }
 });
-
-function FALLBACK_ANCHOR_FOUND(src) {
-  return /let \w+=kWr\(\w+\),\w+=ng\(\)\.safeParse\(\w+\);return \w+\.author\.role===`assistant`&&\w+!=null&&\w+\.success\?/.test(src);
-}

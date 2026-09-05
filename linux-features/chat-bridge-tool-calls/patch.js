@@ -72,21 +72,26 @@ function applyChatBridgeToolCallsPatch(source, context = {}) {
 
     const helper = m.groups.helper;
     const msg = m.groups.msg;
-    // `(u!=null ? u : jitPluginFallback(e))` - keeps kWr's own result when it
-    // matches, adds the jit_plugin path only when kWr returned null.
-    const replacement =
-      `(${helper}!=null?${helper}:function(m){var r=m&&m.recipient;` +
-      `if(typeof r!=="string")return null;var p="__jit_plugin.";var i=r.indexOf(p);` +
-      `if(i===-1)return null;var t=r.slice(i+p.length);return t?` +
-      `{completed:m.status!=="in_progress",pairKey:null,tool:t}:null}(${msg}))` +
+    // Pure INSERTION between `let u=kWr(e),d=ng().safeParse(s);` and the
+    // `return ...` that follows: reassign `u` from the jit_plugin fallback
+    // when kWr returned null. The original expression (which dereferences
+    // u.completed / u.tool / u.pairKey) stays byte-identical, so it can never
+    // see a null `u` it wasn't already prepared for.
+    const insertion =
+      `var __cbtcP="__jit_plugin.",__cbtcIdx;` +
+      `${helper}=${helper}==null&&typeof ${msg}.recipient==="string"&&` +
+      `(__cbtcIdx=${msg}.recipient.indexOf(__cbtcP))!==-1&&` +
+      `__cbtcIdx+__cbtcP.length<${msg}.recipient.length?` +
+      `{completed:${msg}.status!=="in_progress",pairKey:null,` +
+      `tool:${msg}.recipient.slice(__cbtcIdx+__cbtcP.length)}:${helper};` +
       `/*${RUNTIME_MARKER}*/`;
 
-    const target = `${helper}!=null`;
+    const target = "return";
     const targetIndex = m.index + m[0].indexOf(target);
     const patched =
       source.slice(0, targetIndex) +
-      replacement +
-      source.slice(targetIndex + target.length);
+      insertion +
+      source.slice(targetIndex);
 
     if (patched === source) {
       warn("replacement produced no change; source unchanged");
