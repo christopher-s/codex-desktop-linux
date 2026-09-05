@@ -456,3 +456,15 @@ test("icon: idempotent and fail-soft", () => {
   assert.strictEqual(applyChatBridgeToolCallsIconPatch("let a=1;", {}), "let a=1;");
   assert.strictEqual(applyChatBridgeToolCallsIconPatch(src, {settings: {showBridgeToolCalls: false}}), src);
 });
+
+// ---------------------------------------------------------------------------
+// Registry gear-icon patch (chat-bridge-tool-calls-icon-registry)
+// ---------------------------------------------------------------------------
+
+const {
+  applyChatBridgeToolCallsRegistryIconPatch,
+} = require("./icon.js");
+
+test("registry gear: retired descriptor is a no-op", () => {
+  assert.strictEqual(applyChatBridgeToolCallsRegistryIconPatch("anything", {}), "anything");
+});

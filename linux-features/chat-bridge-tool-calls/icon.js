@@ -32,13 +32,21 @@
  */
 
 const RUNTIME_MARKER = "codexLinuxChatBridgeToolCallsIconRuntime";
+const RUNTIME_MARKER_REG = "codexLinuxChatBridgeToolCallsIconRegRuntime";
 
 const ASSET_PATTERN = /^subagent-activity-chip-group-[0-9a-f]+\.js$/;
+const REGISTRY_ASSET_PATTERN = /^agent-activity-item-[0-9a-f]+\.js$/;
 
 // Anchor A — icon switch fallback:
 //   ??(n.namespace===`codex_app`?(0,s_.jsx)(th,{"aria-hidden":!0,className:c_}):null);
 const ICON_ANCHOR =
   /\?\?\((?<n>\w+)\.namespace===`codex_app`\?\(0,(?<jsx>\w+)\.jsx\)\((?<th>\w+),\{"aria-hidden":!0,className:(?<cls>\w+)\}\):null\);/;
+
+// Anchor C — an existing asset-icon usage in the same chunk (gives us the
+// asset-icon component, e.g. $a, which renders {className,asset} pairs):
+//   (0,s_.jsx)($a,{className:`shrink-0 text-text/60`,asset:Fg});
+const ASSET_ICON_ANCHOR =
+  /\(0,(?<jsx2>\w+)\.jsx\)\((?<assetComp>[\w$]+),\{className:`shrink-0 text-text\/60`,asset:(?<sampleAsset>\w+)\}\)/;
 
 // Anchor B — Nb summary-text gate:
 //   c=r.namespace===`codex_app`&&s!==`summary-text`
@@ -64,7 +72,28 @@ function applyChatBridgeToolCallsIconPatch(source, context = {}) {
     }
     let out = source;
 
-    // ---- Site A: icon-switch fallback ----------------------------------
+    // ---- Site 0: extend chip-group's app-primary import with the gear ----
+    // app-primary exports the gear asset as `dh` (gear-light-16). chip-group
+    // already imports from app-primary; append an alias to that import.
+    if (!out.includes(`/*${RUNTIME_MARKER}GEARIMP*/`)) {
+      const imp =
+        /import\{(?<body>[^}]*)\}from"(?<chunk>\.\/app-primary-[0-9a-f]+\.js)"/.exec(out);
+      if (!imp) {
+        warn("app-primary import not found; gear icon unavailable (site 0 skipped)");
+      } else if (/\bdh\b/.test(imp.groups.body)) {
+        warn("app-primary import already binds `dh`; site 0 skipped");
+      } else {
+        const original = imp[0];
+        const bodyClose = original.lastIndexOf("}");
+        const extended =
+          original.slice(0, bodyClose) +
+          `,dh as __cbtcGear/*${RUNTIME_MARKER}GEARIMP*/` +
+          original.slice(bodyClose);
+        out = out.replace(original, extended);
+      }
+    }
+
+    // ---- Site A: icon-switch fallback (th -> gear) -----------------------
     if (!out.includes(`/*${RUNTIME_MARKER}A*/`)) {
       const m = ICON_ANCHOR.exec(out);
       if (!m) {
@@ -79,6 +108,22 @@ function applyChatBridgeToolCallsIconPatch(source, context = {}) {
           warn("site A condition not located inside anchor; skipping");
         } else {
           out = out.slice(0, at) + replacement + out.slice(at + original.length);
+          // swap the icon component th -> gear (only when the import landed)
+          const th = m.groups.th;
+          if (out.includes("__cbtcGear")) {
+            // th is the themed agent-activity COMPONENT; __cbtcGear is a raw
+            // icon asset. Render it through the chunk's asset-icon component
+            // ($a-equivalent) captured from an existing asset usage.
+            const ai = ASSET_ICON_ANCHOR.exec(out);
+            const use = `(0,${m.groups.jsx}.jsx)(${th},{"aria-hidden":!0,className:${m.groups.cls}})`;
+            const useIdx = out.indexOf(use, at);
+            if (useIdx >= 0 && ai) {
+              const gearUse = `(0,${m.groups.jsx}.jsx)(${ai.groups.assetComp},{"aria-hidden":!0,className:${m.groups.cls},asset:__cbtcGear})`;
+              out = out.slice(0, useIdx) + gearUse + out.slice(useIdx + use.length);
+            } else {
+              warn("icon-switch usage/asset-component not found; keeping th");
+            }
+          }
         }
       }
     }
@@ -115,6 +160,15 @@ function applyChatBridgeToolCallsIconPatch(source, context = {}) {
   }
 }
 
+function applyChatBridgeToolCallsRegistryIconPatch(source, context = {}) {
+  // Retired: the registry-route experiment destabilized rendering (tool line
+  // vanished). The icon-switch route in chip.js covers all consumers via the
+  // shared Ub component; this descriptor now intentionally no-ops.
+  void source;
+  void context;
+  return source;
+}
+
 const descriptors = [
   {
     id: "chat-bridge-tool-calls-icon",
@@ -126,13 +180,26 @@ const descriptors = [
     skipDescription: "chat-bridge-tool-calls icon patch",
     apply: applyChatBridgeToolCallsIconPatch,
   },
+  {
+    id: "chat-bridge-tool-calls-icon-registry",
+    order: 20_991,
+    phase: "webview-asset",
+    ciPolicy: "optional",
+    pattern: REGISTRY_ASSET_PATTERN,
+    missingDescription: "agent-activity-item chunk",
+    skipDescription: "chat-bridge-tool-calls registry gear-icon patch",
+    apply: applyChatBridgeToolCallsRegistryIconPatch,
+  },
 ];
 
 module.exports = {
   ASSET_PATTERN,
+  REGISTRY_ASSET_PATTERN,
   RUNTIME_MARKER,
+  RUNTIME_MARKER_REG,
   ICON_ANCHOR,
   NB_ANCHOR,
   applyChatBridgeToolCallsIconPatch,
+  applyChatBridgeToolCallsRegistryIconPatch,
   descriptors,
 };
