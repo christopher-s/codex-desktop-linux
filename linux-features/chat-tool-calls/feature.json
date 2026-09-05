@@ -15,9 +15,6 @@
     },
     "chatSearchRows": {
       "enabled": true
-    },
-    "toolDetails": {
-      "enabled": true
     }
   }
 }

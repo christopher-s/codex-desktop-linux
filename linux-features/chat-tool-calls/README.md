@@ -33,18 +33,6 @@ answer references without a substantially broader normalization rewrite, and
 the payload exposes no query-to-URL mapping. The feature never labels domains
 or URLs as per-query results.
 
-Chat activity items also gain a compact, collapsed **Tool details** disclosure
-without replacing their existing rich cards:
-
-- Tagged Chat web searches show request type, query/action, running/completed
-  status, and a source URL only when the existing action already retains one.
-- Chat Python analysis shows the analysis type, execution status, and whether
-  its existing presentation is text, an image/chart, or has no separate output.
-  Code and visible output are not repeated.
-- Internal identifiers, React state, citation offsets, context-menu flags, and
-  raw JSON are never rendered. The viewer rewrite is structural, idempotent,
-  Chat-only, and fails soft when upstream anchors drift.
-
 ## Settings
 
 ```json
@@ -54,8 +42,7 @@ without replacing their existing rich cards:
     "tweaks": {
       "expandToolActivity": { "enabled": true },
       "searchDomains": { "enabled": true },
-      "chatSearchRows": { "enabled": true },
-      "toolDetails": { "enabled": true }
+      "chatSearchRows": { "enabled": true }
     }
   }
 }
@@ -86,5 +73,4 @@ Verified against official Linux `.deb` payload `codex-desktop
 
 ```bash
 node --test linux-features/chat-tool-calls/test.js
-node --test linux-features/chat-tool-calls/tool-details.test.js
 ```
