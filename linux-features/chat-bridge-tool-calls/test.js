@@ -347,66 +347,66 @@ test("recap Km: real-asset anchor present in viewer", () => {
 const {
   applyChatBridgeToolCallsChipPatch,
   LABEL_ANCHOR,
+  ROW_START_ANCHOR,
+  EXEC_PRIMITIVES_ANCHOR,
+  NATIVE_CARD_ANCHOR,
 } = require("./chip.js");
+const { execFileSync } = require("node:child_process");
+const CHIP_ASSET = "/tmp/codex-native-renderer/webview/assets/subagent-activity-chip-group-a5079589a6b4.js";
 
-test("chip: real-asset Pb anchor matches exactly once", () => {
-  const assetPath = "/tmp/payload-check4/webview/assets/subagent-activity-chip-group-a5079589a6b4.js";
-  if (!fs.existsSync(assetPath)) return;
-  const src = fs.readFileSync(assetPath, "utf8");
-  const all = [...src.matchAll(new RegExp(LABEL_ANCHOR.source, "g"))];
-  assert.strictEqual(all.length, 1, "anchor count");
+function realChipAsset() {
+  assert.ok(fs.existsSync(CHIP_ASSET), `required native asset missing: ${CHIP_ASSET}`);
+  return fs.readFileSync(CHIP_ASSET, "utf8");
+}
+
+test("chip: structural anchors match the real native asset", () => {
+  const src = realChipAsset();
+  for (const [name, anchor] of Object.entries({LABEL_ANCHOR, ROW_START_ANCHOR, EXEC_PRIMITIVES_ANCHOR, NATIVE_CARD_ANCHOR})) {
+    assert.strictEqual([...src.matchAll(new RegExp(anchor.source, "g"))].length, 1, name);
+  }
 });
 
-test("chip: unregistered tool with object arguments gets summary appended", () => {
-  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+test("chip: real asset gains native Sc disclosure with fc and yh", () => {
+  const src = realChipAsset();
   const out = applyChatBridgeToolCallsChipPatch(src, {});
-  assert.ok(out.includes("/*codexLinuxChatBridgeToolCallsChipRuntime*/"), "marker present");
-  // evaluate the inserted block: label gains 'key: value' summary
-  const at = out.indexOf("try{if(zb[e.tool]==null");
-  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsChipRuntime*/");
-  const block = out.slice(at, end);
-  const e = {completed: true, tool: "hermes_run_command", arguments: {session_id: "s1", request_id: "r1", command: "echo hi there friend", background: false}};
-  const zb = {}, Bb = {};
-  let n = "hermes run command";
-  const fn = new Function("e", "zb", "Bb", "n", block + ";return n;");
-  const result = fn(e, zb, Bb, n);
-  assert.ok(result.includes("command: echo hi there friend"), "summary includes command: " + result);
-  assert.ok(!result.includes("session_id"), "bookkeeping field skipped: " + result);
+  assert.notStrictEqual(out, src);
+  assert.ok(out.includes(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
+  assert.match(out, /return\(0,[\w$]+\.jsx\)\(Sc,\{body:__cbtcBody,className:`relative overflow-clip`,disclosure:/);
+  assert.match(out, /__cbtcBody=\(0,[\w$]+\.jsx\)\(fc,\{children:\(0,[\w$]+\.jsx\)\(yh,/);
 });
 
-test("chip: registered-tool labels untouched", () => {
-  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+test("chip: compact summary and Hermes prefix path stay unchanged", () => {
+  const src = realChipAsset();
   const out = applyChatBridgeToolCallsChipPatch(src, {});
-  const at = out.indexOf("try{if(zb[e.tool]==null");
-  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsChipRuntime*/");
-  const block = out.slice(at, end);
-  const e = {completed: true, tool: "automation_update", arguments: {a: 1}};
-  const zb = {automation_update: "scheduled task updated"}, Bb = {};
-  let n = "scheduled task updated";
-  const fn = new Function("e", "zb", "Bb", "n", block + ";return n;");
-  assert.strictEqual(fn(e, zb, Bb, n), "scheduled task updated", "no summary for labeled tools");
+  assert.ok(out.includes("g=Pb(r,o)"), "original Hermes-prefixed compact label path retained");
+  assert.ok(out.includes("summary:y"), "native card receives existing compact summary");
+  assert.ok(out.includes("if(s!==`row`)return y"), "non-row compact variants retained");
 });
 
-test("chip: string/array arguments leave label unchanged", () => {
-  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
-  const out = applyChatBridgeToolCallsChipPatch(src, {});
-  const at = out.indexOf("try{if(zb[e.tool]==null");
-  const end = out.indexOf("/*codexLinuxChatBridgeToolCallsChipRuntime*/");
-  const block = out.slice(at, end);
-  let n = "some tool";
-  const fn = new Function("e", "zb", "Bb", "n", block + ";return n;");
-  assert.strictEqual(fn({completed: true, tool: "t", arguments: "plain string"}, {}, {}, n), "some tool");
-  assert.strictEqual(fn({completed: true, tool: "t", arguments: ["arr"]}, {}, {}, n), "some tool");
-  assert.strictEqual(fn({completed: true, tool: "t", arguments: {}}, {}, {}, n), "some tool", "empty object -> no summary");
+test("chip: expanded body emits all arguments as untruncated pretty JSON", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
+  assert.ok(out.includes("JSON.stringify(r.arguments,null,2)"));
+  assert.ok(!out.includes("__cbtcR.length<2"));
+  assert.ok(!out.includes("slice(0,37)"));
+  assert.ok(!out.includes("session_id`&&"));
+  const injected = out.slice(out.indexOf("let __cbtcBody="), out.indexOf(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
+  assert.ok(!injected.includes("max-h-"));
 });
 
-test("chip: idempotent and fail-soft", () => {
-  const src = "function Pb(e,t){let n=(e.completed?zb[e.tool]:Bb[e.tool])??(0,Ib.default)(e.tool);return x}";
+test("chip: transformed real asset passes node --check", () => {
+  const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
+  const target = "/tmp/chat-bridge-tool-calls-transformed.mjs";
+  fs.writeFileSync(target, out);
+  const checkOutput = execFileSync(process.execPath, ["--check", target], {encoding: "utf8"});
+  assert.strictEqual(checkOutput, "");
+});
+
+test("chip: idempotent, disabled, and fail-soft", () => {
+  const src = realChipAsset();
   const once = applyChatBridgeToolCallsChipPatch(src, {});
   assert.strictEqual(applyChatBridgeToolCallsChipPatch(once, {}), once);
-  const other = "let a=1;";
-  assert.strictEqual(applyChatBridgeToolCallsChipPatch(other, {}), other);
   assert.strictEqual(applyChatBridgeToolCallsChipPatch(src, {settings: {showBridgeToolCalls: false}}), src);
+  assert.strictEqual(applyChatBridgeToolCallsChipPatch("let a=1;", {}), "let a=1;");
 });
 
 // ---------------------------------------------------------------------------
