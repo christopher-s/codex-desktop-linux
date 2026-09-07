@@ -99,7 +99,7 @@ function patchViewer(source) {
   return replaceExactlyOnce(
     source,
     "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
-    `if(f.type===\`dynamic-tool-call\`){if(f.tool===\`handoff\`||f.tool===\`qa_local_echo\`&&f.completed===!1){globalThis.__codexLocalFnQaViewerRouted=(globalThis.__codexLocalFnQaViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
+    `if(f.type===\`dynamic-tool-call\`){globalThis.__codexLocalFnQaLmSeen=(globalThis.__codexLocalFnQaLmSeen??0)+1;if(f.sourceTool===\`qa_local_echo\`||f.tool===\`qa_local_echo\`||f.tool===\`handoff\`)globalThis.__codexLocalFnQaLmItem={tool:f.tool,sourceTool:f.sourceTool,completed:f.completed,hasResult:Object.prototype.hasOwnProperty.call(f,\`result\`)};if(f.tool===\`handoff\`||f.tool===\`qa_local_echo\`&&f.completed===!1){globalThis.__codexLocalFnQaViewerRouted=(globalThis.__codexLocalFnQaViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
     "route incomplete QA local call through native executor",
   );
 }

@@ -71,3 +71,34 @@ disclosure card. The handoff lifecycle consumes the transient executor item;
 the write-back u[D]=O stores the completed item, but it does not reach the
 rendered DOM. Next: trace the CGr turn container / hide_all group the
 completed item lands in.
+
+## app26 iteration — ROOT CAUSE of the persistent-card gap identified
+
+Added viewer instrumentation: __codexLocalFnQaLmSeen / __codexLocalFnQaLmItem.
+
+FINDING: Lm (the per-item renderer) only EVER receives the PENDING item:
+  {tool:"handoff", sourceTool:"qa_local_echo", completed:false, hasResult:false}
+The COMPLETED item (completed:true, result attached, tool restored to
+qa_local_echo) NEVER reaches Lm. Round trip still 100% green:
+  submitted=1 (toolName qa_local_echo, LOCAL-QA-RESULT-73), attached=6,
+  continuation LOCAL-QA-RESULT-73.
+
+ARCHITECTURAL ROOT CAUSE:
+- aWr() builds reasoning groups. pWr(e) EXCLUDES items with
+  type=dynamic-tool-call AND tool=handoff from group membership.
+- Our pending item has tool=handoff (required for the native Bu executor to
+  mount and drive the local call). So it renders standalone/transiently.
+- When the handoff auto-reject resolves, the native handoff lifecycle
+  CONSUMES the resolved call (that is correct for real handoffs: work
+  continues in a new Work thread, so the Chat thread shows only final text).
+- The completed+result-attached item is therefore dropped upstream of Lm and
+  never becomes a persistent disclosure card.
+
+THE TENSION: Bu requires tool=handoff to execute; pWr excludes tool=handoff
+from the persistent reasoning-group card path. One item cannot be both.
+Resolution requires decoupling execution from handoff-lifecycle consumption
+(e.g. drive the local executor without registering the call in the handoff
+lifecycle, or re-emit a separate persistent disclosure item on completion).
+
+STATUS: round trip (protocol) = VERIFIED. Persistent card = blocked on
+handoff-lifecycle consumption; needs a dedicated follow-up.
