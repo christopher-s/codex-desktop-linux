@@ -1,0 +1,16 @@
+{
+  "id": "hermes-chat-lifecycle",
+  "title": "Hermes lifecycle for ChatGPT Custom GPTs",
+  "description": "Opt-in Hermes plugin/hook lifecycle around registered ChatGPT Custom GPT turns while ChatGPT remains the foreground model.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js"
+  },
+  "resources": [
+    {
+      "source": "lifecycle_helper.py",
+      "target": ".codex-linux/features/hermes-chat-lifecycle/lifecycle_helper.py",
+      "mode": "0644"
+    }
+  ]
+}

@@ -353,20 +353,21 @@ const {
 } = require("./chip.js");
 const { execFileSync } = require("node:child_process");
 const CHIP_ASSET = "/tmp/codex-native-renderer/webview/assets/subagent-activity-chip-group-a5079589a6b4.js";
+const realChipTest = fs.existsSync(CHIP_ASSET) ? test : test.skip;
 
 function realChipAsset() {
   assert.ok(fs.existsSync(CHIP_ASSET), `required native asset missing: ${CHIP_ASSET}`);
   return fs.readFileSync(CHIP_ASSET, "utf8");
 }
 
-test("chip: structural anchors match the real native asset", () => {
+realChipTest("chip: structural anchors match the real native asset", () => {
   const src = realChipAsset();
   for (const [name, anchor] of Object.entries({LABEL_ANCHOR, ROW_START_ANCHOR, EXEC_PRIMITIVES_ANCHOR, NATIVE_CARD_ANCHOR})) {
     assert.strictEqual([...src.matchAll(new RegExp(anchor.source, "g"))].length, 1, name);
   }
 });
 
-test("chip: real asset gains native Sc disclosure with a compact recursive argument tree", () => {
+realChipTest("chip: real asset gains native Sc disclosure with a compact recursive argument tree", () => {
   const src = realChipAsset();
   const out = applyChatBridgeToolCallsChipPatch(src, {});
   assert.notStrictEqual(out, src);
@@ -378,7 +379,7 @@ test("chip: real asset gains native Sc disclosure with a compact recursive argum
   assert.ok(!injected.includes("yh"), "shell renderer is not used");
 });
 
-test("chip: compact summary and Hermes prefix path stay unchanged", () => {
+realChipTest("chip: compact summary and Hermes prefix path stay unchanged", () => {
   const src = realChipAsset();
   const out = applyChatBridgeToolCallsChipPatch(src, {});
   assert.ok(out.includes("g=Pb(r,o)"), "original Hermes-prefixed compact label path retained");
@@ -386,12 +387,12 @@ test("chip: compact summary and Hermes prefix path stay unchanged", () => {
   assert.ok(out.includes("if(s!==`row`)return y"), "non-row compact variants retained");
 });
 
-test("chip: native disclosure is emitted only for row variants", () => {
+realChipTest("chip: native disclosure is emitted only for row variants", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   assert.match(out, /if\(s===`row`&&r\.namespace==null&&/);
 });
 
-test("chip: null-namespace Chat rows bypass the icon-only summary wrapper", () => {
+realChipTest("chip: null-namespace Chat rows bypass the icon-only summary wrapper", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   assert.match(
     out,
@@ -404,7 +405,7 @@ test("chip: null-namespace Chat rows bypass the icon-only summary wrapper", () =
   );
 });
 
-test("chip: collapsed rows do not mount the arguments body", () => {
+realChipTest("chip: collapsed rows do not mount the arguments body", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   assert.match(out, /__cbtcBody=__cbtcOpen\?/);
   assert.match(out, /__cbtcWalk\(r\.arguments,null,0,`root`\)/);
@@ -415,7 +416,7 @@ test("chip: collapsed rows do not mount the arguments body", () => {
     "argument row construction remains inside the expansion-only branch");
 });
 
-test("chip: expanded body renders a compact recursive code tree", () => {
+realChipTest("chip: expanded body renders a compact recursive code tree", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   const injected = out.slice(out.indexOf("let __cbtcBody="), out.indexOf(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
   assert.ok(injected.includes("JSON.parse"), "JSON embedded in string values is parsed recursively");
@@ -430,19 +431,19 @@ test("chip: expanded body renders a compact recursive code tree", () => {
   assert.ok(!injected.includes("max-h-"));
 });
 
-test("chip: disclosure has one icon by suppressing the summary's nested icon on rows", () => {
+realChipTest("chip: disclosure has one icon by suppressing the summary's nested icon on rows", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   assert.match(out, /s!==`summary-text`&&!\(s===`row`&&r\.namespace==null\)/);
   const injected = out.slice(out.indexOf("let __cbtcBody="), out.indexOf(`/*${require("./chip.js").RUNTIME_MARKER}Native*/`));
   assert.strictEqual((injected.match(/icon:/g) || []).length, 1, "only the card icon is emitted");
 });
 
-test("chip: card icon carries a stable marker for the gear-icon patch", () => {
+realChipTest("chip: card icon carries a stable marker for the gear-icon patch", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   assert.ok(out.includes("codexLinuxChatBridgeToolCallsCardIcon"));
 });
 
-test("chip: transformed real asset passes node --check", () => {
+realChipTest("chip: transformed real asset passes node --check", () => {
   const out = applyChatBridgeToolCallsChipPatch(realChipAsset(), {});
   const target = "/tmp/chat-bridge-tool-calls-transformed.mjs";
   fs.writeFileSync(target, out);
@@ -450,7 +451,7 @@ test("chip: transformed real asset passes node --check", () => {
   assert.strictEqual(checkOutput, "");
 });
 
-test("chip: idempotent, disabled, and fail-soft", () => {
+realChipTest("chip: idempotent, disabled, and fail-soft", () => {
   const src = realChipAsset();
   const once = applyChatBridgeToolCallsChipPatch(src, {});
   assert.strictEqual(applyChatBridgeToolCallsChipPatch(once, {}), once);

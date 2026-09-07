@@ -1,0 +1,268 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const {
+  extractedAppPatch,
+  mainBundlePatch,
+  webviewAssetPatch,
+} = require("../../scripts/patches/descriptor.js");
+
+const IPC_CHANNEL = "codex_desktop:hermes-chat-lifecycle";
+const MAIN_MARKER = "codexLinuxHermesLifecycleInvoke";
+const PRELOAD_MARKER = "hermesChatLifecycle";
+const RENDERER_MARKER = "codexLinuxHermesLifecycle";
+const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
+
+function countOf(source, needle) {
+  return source.split(needle).length - 1;
+}
+
+function mainRuntimeSource() {
+  return `
+const codexLinuxHermesLifecycleSessions=new Map;
+let codexLinuxHermesHost=null,codexLinuxHermesHostSeq=0,codexLinuxHermesHostBuffer=\`\`,codexLinuxHermesHostPending=new Map;
+function codexLinuxHermesRegistrationManifestPath(){let e=process.env.CODEX_HERMES_GIZMO_MANIFEST;if(e&&String(e).trim())return require(\`node:path\`).resolve(String(e));let t=process.env.CODEX_LINUX_APP_STATE_DIR||require(\`node:path\`).join(require(\`node:os\`).homedir(),\`.local\`,\`state\`,\`codex-desktop\`);return require(\`node:path\`).join(t,\`hermes-chat-lifecycle-gizmos.json\`)}
+function codexLinuxHermesValidGizmoId(e){return typeof e===\`string\`&&/^g-[A-Za-z0-9_-]{8,128}$/.test(e)}
+function codexLinuxHermesAllowedGizmos(){
+  let e=String(process.env.CODEX_HERMES_GIZMO_IDS||\`\`);if(e.trim())return new Set(e.split(\`,\`).map(e=>e.trim()).filter(codexLinuxHermesValidGizmoId));
+  let t=codexLinuxHermesRegistrationManifestPath();try{let e=require(\`node:fs\`);if(!e.existsSync(t))return new Set;let i=e.statSync(t);if(!i.isFile()||i.size>262144)throw new Error(\`invalid-registration-manifest-file\`);let n=JSON.parse(e.readFileSync(t,\`utf8\`));if(n==null||typeof n!==\`object\`||Array.isArray(n)||n.version!==1||n.gizmos==null||typeof n.gizmos!==\`object\`||Array.isArray(n.gizmos))throw new Error(\`invalid-registration-manifest\`);let r=[];for(let[e,t]of Object.entries(n.gizmos))codexLinuxHermesValidGizmoId(e)&&t!=null&&typeof t===\`object\`&&!Array.isArray(t)&&(t.enabled===void 0||t.enabled===!0)&&r.push(e);return new Set(r)}catch(e){return process.env.CODEX_HERMES_LIFECYCLE_DEBUG===\`1\`&&console.warn(\`[hermes-chat-lifecycle] registration manifest rejected:\`,String(e?.message||e)),new Set}
+}
+function codexLinuxHermesLifecycleKey(e){let t=String(e?.gizmo_id||\`\`),n=String(e?.client_conversation_id||e?.conversation_id||\`\`);return t&&n?\`${"${t}"}\\0${"${n}"}\`:null}
+function codexLinuxHermesRejectHostPending(e){for(let[,t]of codexLinuxHermesHostPending){clearTimeout(t.timer),t.resolve({ok:!1,enabled:!1,error:e})}codexLinuxHermesHostPending.clear()}
+function codexLinuxHermesEnsureHost(){
+  if(codexLinuxHermesHost&&codexLinuxHermesHost.exitCode==null&&!codexLinuxHermesHost.killed)return codexLinuxHermesHost;
+  let e=process.env.CODEX_LINUX_FEATURES_DIR;
+  if(!e)throw new Error(\`features-dir-unavailable\`);
+  let t=require(\`node:path\`).join(e,\`hermes-chat-lifecycle\`,\`lifecycle_helper.py\`);
+  if(!require(\`node:fs\`).existsSync(t))throw new Error(\`lifecycle-helper-missing\`);
+  let r=process.env.CODEX_HERMES_PYTHON;if(!r){let n=process.env.HERMES_AGENT_ROOT||require(\`node:path\`).join(require(\`node:os\`).homedir(),\`.hermes\`,\`hermes-agent\`),i=require(\`node:path\`).join(n,\`venv\`,\`bin\`,\`python3\`);r=require(\`node:fs\`).existsSync(i)?i:\`python3\`}
+  let n=require(\`node:child_process\`).spawn(r,[t,\`--persistent\`],{env:process.env,stdio:[\`pipe\`,\`pipe\`,\`pipe\`]});
+  codexLinuxHermesHost=n,codexLinuxHermesHostBuffer=\`\`;
+  n.stdout.on(\`data\`,e=>{codexLinuxHermesHostBuffer+=String(e);for(;;){let e=codexLinuxHermesHostBuffer.indexOf(\`\\n\`);if(e<0)break;let t=codexLinuxHermesHostBuffer.slice(0,e);codexLinuxHermesHostBuffer=codexLinuxHermesHostBuffer.slice(e+1);if(!t.trim())continue;let n;try{n=JSON.parse(t)}catch{continue}let r=String(n?._request_id??\`\`),i=codexLinuxHermesHostPending.get(r);i&&(codexLinuxHermesHostPending.delete(r),clearTimeout(i.timer),delete n._request_id,i.resolve(n))}}),n.stderr.on(\`data\`,e=>{process.env.CODEX_HERMES_LIFECYCLE_DEBUG===\`1\`&&String(e).trim()&&console.warn(\`[hermes-chat-lifecycle] helper stderr:\`,String(e).trim())}),n.on(\`error\`,e=>{codexLinuxHermesRejectHostPending(String(e?.message||e)),codexLinuxHermesHost=null}),n.on(\`close\`,e=>{codexLinuxHermesRejectHostPending(\`lifecycle-helper-exited-${"${e}"}\`),codexLinuxHermesHost=null});
+  return n
+}
+async function codexLinuxHermesHostRequest(e){
+  return await new Promise(t=>{let n;try{n=codexLinuxHermesEnsureHost()}catch(e){t({ok:!1,enabled:!1,error:String(e?.message||e)});return}let r=String(++codexLinuxHermesHostSeq),i=setTimeout(()=>{let e=codexLinuxHermesHostPending.get(r);e&&(codexLinuxHermesHostPending.delete(r),e.resolve({ok:!1,enabled:!1,error:\`lifecycle-helper-timeout\`}))},2e4);i.unref?.(),codexLinuxHermesHostPending.set(r,{resolve:t,timer:i}),n.stdin.write(JSON.stringify({...e,_request_id:r})+\`\\n\`,e=>{if(!e)return;let n=codexLinuxHermesHostPending.get(r);n&&(codexLinuxHermesHostPending.delete(r),clearTimeout(n.timer),n.resolve({ok:!1,enabled:!1,error:String(e?.message||e)}))})})
+}
+async function codexLinuxHermesLifecycleInvoke(e){
+  if(e==null||typeof e!==\`object\`||Array.isArray(e))return{ok:!1,enabled:!1,error:\`invalid-request\`};
+  let t=typeof e.gizmo_id===\`string\`?e.gizmo_id:\`\`,n=codexLinuxHermesAllowedGizmos();
+  if(!t||!n.has(t))return{ok:!0,enabled:!1,reason:\`gizmo-not-registered\`};
+  if(e.phase===\`probe\`)return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:process.env.CODEX_HERMES_QA_FAULT===\`model_call_error\`?\`model_call_error\`:null};
+  let r={...e},i=codexLinuxHermesLifecycleKey(r);
+  if(r.phase===\`begin_turn\`){
+    if(i==null)return{ok:!1,enabled:!1,error:\`missing-conversation-identity\`};
+    let e=codexLinuxHermesLifecycleSessions.get(i);
+    e??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
+    r.session_id=e.sessionId,r.is_first_turn=e.turnCount===0,e.turnCount+=1,codexLinuxHermesLifecycleSessions.set(i,e);
+  }else if(typeof r.session_id!==\`string\`||r.session_id.length===0){
+    let e=i==null?null:codexLinuxHermesLifecycleSessions.get(i);
+    if(e==null)return{ok:!1,enabled:!1,error:\`unknown-session\`};
+    r.session_id=e.sessionId;
+  }
+  let a=await codexLinuxHermesHostRequest(r);
+  if(r.phase===\`close_session\`&&a?.ok===!0){if(i!=null)codexLinuxHermesLifecycleSessions.delete(i);else for(let[e,t]of codexLinuxHermesLifecycleSessions)t?.sessionId===r.session_id&&codexLinuxHermesLifecycleSessions.delete(e)}
+  return a
+}
+/*${MAIN_MARKER}*/
+`;
+}
+
+function patchMainBundle(source) {
+  if (countOf(source, `/*${MAIN_MARKER}*/`) === 1) return source;
+  const contract = /function ([A-Za-z_$][\w$]*)\(\{buildFlavor:([A-Za-z_$][\w$]*),getContextForWebContents:([A-Za-z_$][\w$]*),isTrustedIpcEvent:([A-Za-z_$][\w$]*)\}\)\{([A-Za-z_$][\w$]*)\.ipcMain\.on/u;
+  const matches = [...source.matchAll(new RegExp(contract.source, "gu"))];
+  if (matches.length !== 1) {
+    console.warn(`WARN: Expected one trusted IPC initializer for Hermes lifecycle, found ${matches.length}`);
+    return source;
+  }
+  const [match] = matches;
+  const [full, fnName, buildFlavorVar, contextVar, trustedVar, electronVar] = match;
+  const replacement =
+    `${mainRuntimeSource()}function ${fnName}({buildFlavor:${buildFlavorVar},getContextForWebContents:${contextVar},isTrustedIpcEvent:${trustedVar}}){` +
+    `${electronVar}.ipcMain.handle(\`${IPC_CHANNEL}\`,async(e,t)=>{` +
+    `if(!${trustedVar}(e))return{ok:!1,enabled:!1,error:\`untrusted-ipc\`};` +
+    `try{return await codexLinuxHermesLifecycleInvoke(t)}catch(e){return console.warn(\`[hermes-chat-lifecycle] IPC failure\`,e),{ok:!1,enabled:!1,error:String(e?.message||e)}}});` +
+    `${electronVar}.ipcMain.on`;
+  return source.replace(full, replacement);
+}
+
+function patchPreload(extractedDir) {
+  const preloadPath = path.join(extractedDir, ".vite", "build", "preload.js");
+  if (!fs.existsSync(preloadPath)) {
+    const reason = "preload.js not found";
+    console.warn(`WARN: ${reason} - skipping Hermes lifecycle preload patch`);
+    return { matched: 0, changed: 0, reason };
+  }
+  const source = fs.readFileSync(preloadPath, "utf8");
+  if (source.includes(`${PRELOAD_MARKER}:`)) {
+    return { matched: 1, changed: 0, reason: null, target: path.relative(extractedDir, preloadPath) };
+  }
+  const anchor = "getBuildFlavor:()=>w,isDeviceCheckSupported:";
+  const count = countOf(source, anchor);
+  if (count !== 1) {
+    const reason = `Expected one preload bridge anchor, found ${count}`;
+    console.warn(`WARN: ${reason} - skipping Hermes lifecycle preload patch`);
+    return { matched: 0, changed: 0, reason };
+  }
+  const replacement =
+    `getBuildFlavor:()=>w,${PRELOAD_MARKER}:t=>e.ipcRenderer.invoke(\`${IPC_CHANNEL}\`,t),isDeviceCheckSupported:`;
+  fs.writeFileSync(preloadPath, source.replace(anchor, replacement), "utf8");
+  return { matched: 1, changed: 1, reason: null, target: path.relative(extractedDir, preloadPath) };
+}
+
+function patchRendererAsset(source) {
+  if (source.includes(`let ${RENDERER_MARKER}=null`)) return source;
+
+  const turnContract = /([A-Za-z_$][\w$]*)=t\.projectId\?\?e\.get\(([A-Za-z_$][\w$]*),u\),([A-Za-z_$][\w$]*)=t\.conversationOrigin===void 0\?e\.get\(([A-Za-z_$][\w$]*),u\):t\.conversationOrigin/u;
+  const match = source.match(turnContract);
+  if (match == null) {
+    console.warn("WARN: ChatGPT resolved-project turn contract not found - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  if ([...source.matchAll(new RegExp(turnContract.source, "gu"))].length !== 1) {
+    console.warn("WARN: ChatGPT resolved-project turn contract is ambiguous - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+
+  const [full, projectVar, projectAtom, originVar, originAtom] = match;
+  const injected =
+    `${projectVar}=t.projectId??e.get(${projectAtom},u);` +
+    `let ${RENDERER_MARKER}=null,codexLinuxHermesTerminalSent=!1,codexLinuxHermesPreflight=null,` +
+    `codexLinuxHermesMessageText=m=>typeof m===\`string\`?m:Array.isArray(m?.content?.parts)?m.content.parts.filter(x=>typeof x===\`string\`).join(\`\\n\`):typeof m?.content?.text===\`string\`?m.content.text:\`\`,` +
+    `codexLinuxHermesPreflightMap=globalThis.__codexLinuxHermesLifecyclePreflights??=(new Map),` +
+    `codexLinuxHermesNotify=(n,i={})=>{if(${RENDERER_MARKER}?.enabled!==!0||codexLinuxHermesTerminalSent)return;codexLinuxHermesTerminalSent=!0,codexLinuxHermesPreflightMap.delete(u);` +
+    `let a=e.get(Qz,u),h=e.get(nB,u)??{},g=a==null?null:h[a]?.message??null;` +
+    `globalThis.electronBridge?.hermesChatLifecycle?.({phase:n,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),assistant_message:codexLinuxHermesMessageText(g),model:r,...i}).catch(()=>{})};` +
+    `if(o?.author.role===\`user\`&&typeof ${projectVar}===\`string\`&&${projectVar}.length>0)try{` +
+    `let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`probe\`,gizmo_id:${projectVar}});if(q?.enabled===!0){` +
+    `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:q.qa_fault??null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
+    `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +
+    `if(n?.enabled===!0){${RENDERER_MARKER}=n;let codexLinuxHermesContextMessages=[];` +
+    `typeof n.system_context===\`string\`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(a_i(n.system_context,rp(),!0));` +
+    `typeof n.user_context===\`string\`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(i_i(n.user_context,[],{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0},[],rp()));` +
+    `codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])}` +
+    `if(codexLinuxHermesPreflight.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}}}` +
+    `catch(e){codexLinuxHermesPreflightMap.delete(u),console.warn(\`[hermes-chat-lifecycle] begin_turn failed\`,e)}` +
+    `let ${originVar}=t.conversationOrigin===void 0?e.get(${originAtom},u):t.conversationOrigin`;
+
+  let patched = source.replace(full, injected);
+
+  const apiStartAnchor = "let p=await e.get(yR).startCompletionStream(";
+  if (countOf(patched, apiStartAnchor) !== 1) {
+    console.warn("WARN: ChatGPT completion stream start contract not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  patched = patched.replace(
+    apiStartAnchor,
+    `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
+      `if(${RENDERER_MARKER}?.enabled===!0)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\`,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r})}catch(e){console.warn(\`[hermes-chat-lifecycle] pre_api_request failed\`,e)}` +
+      `if(codexLinuxHermesPreflight?.qaFault===\`model_call_error\`){xe({error:\`qa-injected-model-call-error\`,errorKind:\`network\`,requestId:s,type:\`fetch-stream-error\`}),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
+      `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
+      `codexLinuxHermesPreflight&&(codexLinuxHermesPreflight.started=!0);let p=await e.get(yR).startCompletionStream(`,
+  );
+
+  const stopHandlerAnchor = "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;";
+  if (countOf(patched, stopHandlerAnchor) !== 1) {
+    console.warn("WARN: ChatGPT stop handler contract not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  patched = patched.replace(
+    stopHandlerAnchor,
+    "async function e_i(e,t,n){let codexLinuxHermesPendingPreflight=globalThis.__codexLinuxHermesLifecyclePreflights?.get(t);if(codexLinuxHermesPendingPreflight){codexLinuxHermesPendingPreflight.cancelled=!0;if(!codexLinuxHermesPendingPreflight.started)return}if(e.get(CH,t)||e.get(wJr,t))return;",
+  );
+
+  const streamRegisteredAnchor = "Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,";
+  if (countOf(patched, streamRegisteredAnchor) !== 1) {
+    console.warn("WARN: ChatGPT stream registration contract not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  patched = patched.replace(
+    streamRegisteredAnchor,
+    "Lqr({scope:e,conversationId:u,streamRequestId:g}),codexLinuxHermesPreflightMap.delete(u),codexLinuxHermesPreflight?.cancelled&&$gi(e,u),{conversationId:u,",
+  );
+
+  const successAnchor = "be=t=>{ve(t,`completed`)&&(Vfi(t),";
+  if (countOf(patched, successAnchor) !== 1) {
+    console.warn("WARN: ChatGPT completion success contract not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  patched = patched.replace(
+    successAnchor,
+    "be=t=>{ve(t,`completed`)&&(codexLinuxHermesNotify(`complete_turn`),Vfi(t),",
+  );
+
+  const errorAnchor = "xe=n=>{if(!ve(n.requestId,`failed`))return;";
+  if (countOf(patched, errorAnchor) !== 1) {
+    console.warn("WARN: ChatGPT completion error contract not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  patched = patched.replace(
+    errorAnchor,
+    "xe=n=>{if(!ve(n.requestId,`failed`))return;codexLinuxHermesNotify(`model_call_error`,{error:n.error});",
+  );
+
+  const cancelAnchor = "logCancellation:()=>ye({result:`canceled`})";
+  if (countOf(patched, cancelAnchor) !== 1) {
+    console.warn("WARN: ChatGPT cancellation contract not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  patched = patched.replace(
+    cancelAnchor,
+    "logCancellation:()=>(codexLinuxHermesNotify(`abort_turn`),ye({result:`canceled`}))",
+  );
+  return patched;
+}
+
+function matchesRendererContract(source) {
+  return source.includes("oneTurnDeveloperInstructions") &&
+    source.includes("conversation_mode") &&
+    source.includes("startCompletionStream") &&
+    /\.projectId\?\?e\.get\(/u.test(source);
+}
+
+module.exports = {
+  APP_INITIAL_PATTERN,
+  IPC_CHANNEL,
+  MAIN_MARKER,
+  PRELOAD_MARKER,
+  RENDERER_MARKER,
+  mainRuntimeSource,
+  matchesRendererContract,
+  patchMainBundle,
+  patchPreload,
+  patchRendererAsset,
+  descriptors: [
+    mainBundlePatch({
+      id: "hermes-chat-lifecycle-main-ipc",
+      order: 29_700,
+      ciPolicy: "opt-in",
+      apply: patchMainBundle,
+    }),
+    extractedAppPatch({
+      id: "hermes-chat-lifecycle-preload-ipc",
+      phase: "extracted-app:pre-webview",
+      order: 29_710,
+      ciPolicy: "opt-in",
+      apply: patchPreload,
+      status: (result, warnings) => {
+        if (result?.matched !== 1) {
+          return { status: "skipped-optional", reason: result?.reason ?? warnings[0] ?? null };
+        }
+        return result.changed === 1 ? "applied" : "already-applied";
+      },
+    }),
+    webviewAssetPatch({
+      id: "hermes-chat-lifecycle-chatgpt-turn",
+      order: 29_720,
+      ciPolicy: "opt-in",
+      pattern: APP_INITIAL_PATTERN,
+      assetMatch: matchesRendererContract,
+      missingDescription: "ChatGPT app-initial bundle with semantic turn contracts",
+      skipDescription: "Hermes ChatGPT lifecycle renderer patch",
+      apply: patchRendererAsset,
+    }),
+  ],
+};
