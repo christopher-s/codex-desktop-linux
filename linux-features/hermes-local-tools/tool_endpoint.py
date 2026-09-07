@@ -69,11 +69,24 @@ class H(BaseHTTPRequestHandler):
         if not isinstance(name, str) or not name:
             self._send(400, {"error": "missing name"})
             return
+        # Advertised model-facing names carry a `hermes_` prefix to avoid
+        # collisions with built-in local functions; strip it to reach the
+        # Hermes registry tool of the same bare name. If the bare name is not
+        # registered, fall back to the advertised name so the registry's own
+        # "Unknown tool" error surfaces truthfully.
+        registry_name = name
+        if name.startswith("hermes_"):
+            bare = name[len("hermes_"):]
+            try:
+                if bare in set(_mt.get_all_tool_names()):
+                    registry_name = bare
+            except Exception:  # noqa
+                pass
         if not _READY["ok"] or _mt is None:
             self._send(503, {"error": f"hermes not ready: {_READY['err']}"})
             return
         try:
-            out = _mt.handle_function_call(name, args, task_id=payload.get("task_id") or "codex-phase1")
+            out = _mt.handle_function_call(registry_name, args, task_id=payload.get("task_id") or "codex-phase1")
             # out is a JSON string per registry contract; parse to embed.
             try:
                 result = json.loads(out)

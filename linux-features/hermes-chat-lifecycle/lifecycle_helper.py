@@ -138,7 +138,10 @@ def _load_hermes() -> dict[str, Any]:
     root = os.environ.get("HERMES_AGENT_ROOT")
     hermes_root = Path(root).expanduser() if root else Path.home() / ".hermes" / "hermes-agent"
     if not hermes_root.is_dir():
-        raise RuntimeError(f"Hermes agent root not found: {hermes_root}")
+        # Graceful local-Hermes detection: when Hermes is not installed locally,
+        # the lifecycle host disables itself (and tool dispatch) rather than
+        # raising, so plain-Chat turns proceed without a Hermes layer.
+        raise HermesUnavailable(f"Hermes agent root not found: {hermes_root}")
     root_text = str(hermes_root)
     if root_text not in sys.path:
         sys.path.insert(0, root_text)
@@ -158,6 +161,8 @@ def _load_hermes() -> dict[str, Any]:
     except Exception:
         get_active_profile_name = lambda: ""  # noqa: E731
 
+    # Tool dispatch: model_tools is imported lazily on first tool_call so the
+    # lifecycle host does not pay the registry boot cost for memory-only turns.
     _HERMES = {
         "MemoryManager": MemoryManager,
         "build_memory_context_block": build_memory_context_block,
@@ -170,8 +175,36 @@ def _load_hermes() -> dict[str, Any]:
         "get_hermes_home": get_hermes_home,
         "load_memory_provider": load_memory_provider,
         "get_active_profile_name": get_active_profile_name,
+        "model_tools": None,
     }
     return _HERMES
+
+
+class HermesUnavailable(RuntimeError):
+    """Raised when the local Hermes agent runtime is not installed/reachable."""
+
+
+def _load_model_tools() -> Any:
+    """Lazily import and boot the Hermes tool registry in this process.
+
+    Shares the process's single Hermes runtime with the lifecycle session, so
+    tool calls execute against the same registry and can be recorded into the
+    same LCM transcript the lifecycle host maintains.
+    """
+    h = _load_hermes()
+    mt = h.get("model_tools")
+    if mt is not None:
+        return mt
+    try:
+        import model_tools  # type: ignore
+
+        model_tools.discover_builtin_tools()
+        h["model_tools"] = model_tools
+        _log({"event": "model_tools_boot", "tool_count": len(model_tools.get_all_tool_names())})
+        return model_tools
+    except Exception as exc:  # noqa
+        _log({"event": "model_tools_boot_error", "error": f"{type(exc).__name__}: {exc}"})
+        raise HermesUnavailable(f"model_tools unavailable: {type(exc).__name__}: {exc}")
 
 
 def _env_enabled(name: str, *, default: bool = True) -> bool:
@@ -1057,8 +1090,96 @@ def _complete_turn(payload: dict[str, Any], runtime: SessionRuntime) -> dict[str
     }
 
 
+def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute a Hermes tool in this shared process and return its result.
+
+    The Codex ChatGPT executor routes client-advertised local-function calls
+    here instead of to a separate HTTP endpoint, so the call runs against the
+    same Hermes runtime (and is recorded into the same LCM transcript) that the
+    lifecycle session maintains. Works in plain Chat: the session is keyed by
+    the conversation, not a Custom-GPT gizmo.
+    """
+    name = payload.get("name")
+    args = payload.get("arguments") or {}
+    if not isinstance(name, str) or not name:
+        return {"ok": False, "enabled": True, "phase": "tool_call", "error": "missing-name"}
+    if not isinstance(args, dict):
+        return {"ok": False, "enabled": True, "phase": "tool_call", "error": "arguments-not-object"}
+
+    # Strip the model-facing `hermes_` prefix to reach the bare registry tool,
+    # mirroring the advertised surface; fall back to the advertised name so the
+    # registry's own "Unknown tool" error surfaces truthfully.
+    registry_name = name
+    try:
+        mt = _load_model_tools()
+        if name.startswith("hermes_"):
+            bare = name[len("hermes_"):]
+            if bare in set(mt.get_all_tool_names()):
+                registry_name = bare
+    except HermesUnavailable as exc:
+        return {"ok": False, "enabled": False, "phase": "tool_call", "name": name, "error": str(exc)}
+
+    session_id = str(payload.get("session_id") or "")
+    conversation_id = str(payload.get("conversation_id") or payload.get("client_conversation_id") or "")
+    task_id = f"chatgpt-codex:{session_id or conversation_id or 'tool'}"
+
+    started = time.time()
+    try:
+        out = mt.handle_function_call(registry_name, args, task_id=task_id)
+        try:
+            result = json.loads(out)
+        except Exception:  # noqa
+            result = out
+        elapsed_ms = int((time.time() - started) * 1000)
+        _log(
+            {
+                "event": "tool_call",
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "name": name,
+                "registry_name": registry_name,
+                "ok": True,
+                "elapsed_ms": elapsed_ms,
+                "arg_keys": sorted(args.keys()),
+            }
+        )
+        return {
+            "ok": True,
+            "enabled": True,
+            "phase": "tool_call",
+            "name": name,
+            "registry_name": registry_name,
+            "result": result,
+            "elapsed_ms": elapsed_ms,
+        }
+    except Exception as exc:  # noqa
+        elapsed_ms = int((time.time() - started) * 1000)
+        _log(
+            {
+                "event": "tool_call_error",
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "name": name,
+                "registry_name": registry_name,
+                "error": f"{type(exc).__name__}: {exc}",
+                "elapsed_ms": elapsed_ms,
+            }
+        )
+        return {
+            "ok": False,
+            "enabled": True,
+            "phase": "tool_call",
+            "name": name,
+            "registry_name": registry_name,
+            "error": f"{type(exc).__name__}: {exc}",
+            "elapsed_ms": elapsed_ms,
+        }
+
+
 def _handle(payload: dict[str, Any]) -> dict[str, Any]:
     phase = payload.get("phase")
+    if phase == "tool_call":
+        return _handle_tool_call(payload)
     if phase not in {
         "begin_turn", "pre_api_request", "complete_turn", "abort_turn",
         "model_call_error", "close_session",

@@ -1,130 +1,63 @@
-# local-function-probe (QA disposable)
+# local-function-probe (Hermes tools via client-local function protocol)
 
-Patches the Chat-mode client to execute a local `qa_local_echo` function
-call through the native handoff executor and return a fixed local result,
-proving the client-local function tool-call round trip.
+Patches the Chat-mode client to advertise **bare Hermes tools** through the
+client-local function protocol (`local_function_signatures`) and dispatch each
+call to the **shared Hermes runtime**, so the model can invoke genuine Hermes
+tools by name inside an ordinary Chat conversation.
 
-## Status: round trip VERIFIED (app24)
+## Advertised tools
 
-Counters at completion:
-- normalization (uGr `local.qa_local_echo` branch): fires
-- viewer routing to native `Bu` executor: fires
-- app-primary detector: fires
-- result submitted: 1 (`{accepted:false, message:"LOCAL-QA-RESULT-73"}`, toolName `qa_local_echo`)
-- assistant continuation: `LOCAL-QA-RESULT-73` verbatim
+Three bare tools are advertised (table form in the signature builder):
 
-## What the patch does (app-initial)
+- `hermes_read_file`  → registry `read_file`
+- `hermes_search_files` → registry `search_files`
+- `hermes_web_search` → registry `web_search`
 
-1. `tWr` — advertise `qa_local_echo` signature in real + prepare requests.
-2. `$Wr` entry instrumentation (`__codexLocalFnQaWrCalled/WrRecipient`).
-3. `uGr` — normalize BOTH `functions.qa_local_echo` AND `local.qa_local_echo`
-   recipients to pending, handoff-shaped items with
-   `pairKey: local-function:${callId}` and `tool: handoff`.
-4. `_Gr.safeParse` branch — normalize dynamic-tool-call metadata path
-   (kept for parity; not the live path).
-5. Bridge `__jit_plugin` fallback — normalize embedded recipient (kept for parity).
-6. `rGr`/`eGr` — classify the marked hidden tool result and attach
-   `result` to the original dynamic-tool-call by call-id pair key.
-7. `r_i` — mark hidden local-function results with
-   `metadata.codex_local_function_result: true`.
+The `hermes_` prefix is model-facing only (avoids collision with built-in
+local functions). Dispatch strips it to reach the registry tool of the same
+bare name; if the bare name is not registered, the advertised name is used so
+the registry's own "Unknown tool" error surfaces truthfully.
 
-## app-primary
+## Dispatch path (Path A)
 
-- Detector `I0t` accepts `functions./local.` qa_local_echo and embedded
-  `__jit_plugin.qa_local_echo` recipients; drops the `ly` gate and the
-  `in_progress` exclusion.
-- Auto-reject result replaced with `{accepted:false, message:"LOCAL-QA-RESULT-73"}`.
+The executor (`D0t`) routes each call through the **Hermes lifecycle IPC**
+first, so tool execution shares the same process/runtime/session as the
+lifecycle host — no separate HTTP endpoint, no `hermes-chatgpt` bridge:
 
-## viewer
+```
+model emits local.<tool>
+  → detector (I0t) + normalizer (uGr)  →  handoff item
+  → native executor (D0t)
+      → electronBridge.hermesChatLifecycle({phase:'tool_call', ...})
+          → main-bundle tool_call bypass (conversation-keyed, no gizmo)
+          → lifecycle_helper.py _handle_tool_call
+          → model_tools.handle_function_call (shared runtime)
+  → result {accepted:false, message:<tool output>}
+  → assistant consumes the result and continues
+```
 
-- `dynamic-tool-call` branch routes `tool==="qa_local_echo"` (any completion
-  state) to the native `Bu` handoff executor alongside `handoff`.
+This requires the `hermes-chat-lifecycle` feature to be enabled so the
+`electronBridge.hermesChatLifecycle` IPC is present. When that bridge is
+absent (feature disabled), the executor falls back to the **loopback HTTP tool
+endpoint** (`127.0.0.1:9473/call`, owned by the `hermes-local-tools` feature)
+to stay functional on its own.
 
-## chip-group
+## Why no dispatcher
 
-- Renders `arguments` AND own-property `result` in the recursive code tree
-  (captures `__codexLocalFnQaChipItem`).
+Earlier Phase 1 used a single dispatcher tool. This probe proves the server
+honestly honors **multiple** advertised functions and lets the model call each
+by bare name — so a dispatcher is not required, and the tool surface can match
+Hermes's own progressive-disclosure shape (curated bare core + a search/describe/
+call trio) without a catch-all shim.
 
-## Remaining gap
+## Status: VERIFIED (merge build)
 
-The completed-turn view does NOT persist a visible expandable disclosure
-card for the call (no `.group/activity-header` in the finished thread).
-The round trip and result pairing work; persistent card rendering in the
-completed view is the open gate.
+- Multi-signature honored: `sigBuilds` > 1, each bare tool called and executed.
+- IPC dispatch confirmed live from a plain-Chat webview:
+  `hermes_read_file` → `read_file`, real file content returned, `enabled:true`.
+- Full model round trip: prompt → tool call via IPC → lifecycle host executes
+  in an auto-created plain-Chat session (`tool_call ok:true`) → assistant
+  restates the file content (`PHASE1-DETERMINISTIC-FIXTURE-73`) verbatim.
 
-## app25 iteration (round trip still green; persistent card still open)
-
-Changes:
-- viewer routes qa_local_echo to Bu ONLY while completed===!1; completed items
-  fall through to the generic el/chip disclosure renderer.
-- uGr local./functions. branches + item construction now propagate sourceTool.
-- eGr restores tool=sourceTool (qa_local_echo) when attaching result, and
-  records __codexLocalFnQaResultAttached / __codexLocalFnQaAttachedItem.
-
-Live (app25): norm=11, route=3, submitted=1 (toolName qa_local_echo,
-message LOCAL-QA-RESULT-73), attached=6, attachedItem.tool=qa_local_echo,
-continuation LOCAL-QA-RESULT-73. Round trip STILL works after routing change.
-
-OPEN: completed item is built ($Wr fires) and result attaches (eGr fires),
-but the finished turn renders only user/assistant messages — no persistent
-disclosure card. The handoff lifecycle consumes the transient executor item;
-the write-back u[D]=O stores the completed item, but it does not reach the
-rendered DOM. Next: trace the CGr turn container / hide_all group the
-completed item lands in.
-
-## app26 iteration — ROOT CAUSE of the persistent-card gap identified
-
-Added viewer instrumentation: __codexLocalFnQaLmSeen / __codexLocalFnQaLmItem.
-
-FINDING: Lm (the per-item renderer) only EVER receives the PENDING item:
-  {tool:"handoff", sourceTool:"qa_local_echo", completed:false, hasResult:false}
-The COMPLETED item (completed:true, result attached, tool restored to
-qa_local_echo) NEVER reaches Lm. Round trip still 100% green:
-  submitted=1 (toolName qa_local_echo, LOCAL-QA-RESULT-73), attached=6,
-  continuation LOCAL-QA-RESULT-73.
-
-ARCHITECTURAL ROOT CAUSE:
-- aWr() builds reasoning groups. pWr(e) EXCLUDES items with
-  type=dynamic-tool-call AND tool=handoff from group membership.
-- Our pending item has tool=handoff (required for the native Bu executor to
-  mount and drive the local call). So it renders standalone/transiently.
-- When the handoff auto-reject resolves, the native handoff lifecycle
-  CONSUMES the resolved call (that is correct for real handoffs: work
-  continues in a new Work thread, so the Chat thread shows only final text).
-- The completed+result-attached item is therefore dropped upstream of Lm and
-  never becomes a persistent disclosure card.
-
-THE TENSION: Bu requires tool=handoff to execute; pWr excludes tool=handoff
-from the persistent reasoning-group card path. One item cannot be both.
-Resolution requires decoupling execution from handoff-lifecycle consumption
-(e.g. drive the local executor without registering the call in the handoff
-lifecycle, or re-emit a separate persistent disclosure item on completion).
-
-STATUS: round trip (protocol) = VERIFIED. Persistent card = blocked on
-handoff-lifecycle consumption; needs a dedicated follow-up.
-
-## app27 iteration — persistent card root cause fully characterized
-
-Live turn-data scan (completed turn):
-  status:"complete", turn.items = [user-message, chatgpt-reasoning-group, assistant-message]
-The reasoning-group IS present in the completed turn data, but its nested
-renderable items are empty and its recap is hide_all, so the Km component
-returns null and nothing visible mounts. No dynamic-tool-call fiber exists
-in the finished view.
-
-Attempted fixes (app27):
-- group-ctor: retain dynamic-tool-call member even when a recap is present
-  (items: recap==null || type===dynamic-tool-call ? [item] : []).
-- visibility gate: keep hidden reasoning group when source recipient is
-  qa_local_echo.
-Neither made the completed item reach Lm. Lm only ever sees the PENDING
-handoff item (completed:false, hasResult:false) during streaming.
-
-ROOT CAUSE (final): the completed call message is folded into a hide_all
-reasoning group whose renderable items are emptied by the recap; the
-transient native Bu executor consumes the pending handoff item during
-streaming, and after the handoff resolves, no standalone completed item is
-re-emitted into the visible turn. Round trip remains 100% functional
-(submitted=1, toolName qa_local_echo, LOCAL-QA-RESULT-73, continuation
-correct) — the gap is purely the persistent disclosure card, which requires
-re-emitting a completed standalone item or restructuring the recap grouping.
+Instrumentation is namespaced `__codexP2*` (`__codexP2ExecCalls`,
+`__codexP2Dispatch`, `__codexP2EndpointResp`).

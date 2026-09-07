@@ -162,6 +162,39 @@ Renderer lifecycle calls send only structured-clone-safe primitives/plain data. 
 
 This is required for steady-state reliability: runtime QA found that a mutable renderer message object could serialize successfully at `begin_turn` and later fail at `pre_api_request` with `IPC arguments could not be serialized`. The text-only contract removed that second-turn failure; a rebuilt two-turn Winston regression paired `pre_api_request` / `post_api_request` with API call counts `1` and `2` and produced no serialization warning.
 
+## `tool_call` phase (plain-Chat tool dispatch)
+
+The host also serves a `tool_call` phase that executes a single Hermes tool in
+the shared runtime, letting ordinary Chat conversations call genuine Hermes
+tools with **no Custom-GPT gizmo**:
+
+```text
+renderer → electronBridge.hermesChatLifecycle({
+  phase: "tool_call", name, arguments, callId, conversationId,
+  client_conversation_id, session_id?
+})
+```
+
+Main process:
+
+- `tool_call` bypasses the gizmo-registration gate (it is keyed by the
+  conversation, not a gizmo) and auto-creates a process-local
+  `hs_codex_<uuid>` session keyed by `tool\0<conversation_id>`, so a bare
+  `conversationId` is sufficient.
+- The request is forwarded to the host; the host lazily boots
+  `model_tools` (the same registry instance the lifecycle session uses),
+  strips the model-facing `hermes_` prefix to reach the registry tool of the
+  same bare name, calls `model_tools.handle_function_call`, and returns the
+  parsed result plus a `tool_call` diagnostic event.
+
+When the local Hermes runtime is not installed, `tool_call` answers
+`{ok:false, enabled:false}` instead of raising, so plain-Chat turns proceed
+without a Hermes layer and the host stays alive for subsequent requests.
+
+This is the dispatch target for the `local-function-probe` executor (Path A):
+tool execution runs in the same process/session as Hindsight/LCM state, with
+no separate HTTP endpoint and no `hermes-chatgpt` bridge.
+
 ## Hidden context injection
 
 Hermes uses two different authority channels, and Codex now mirrors that split.

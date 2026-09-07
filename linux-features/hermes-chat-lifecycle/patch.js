@@ -48,6 +48,19 @@ async function codexLinuxHermesHostRequest(e){
 }
 async function codexLinuxHermesLifecycleInvoke(e){
   if(e==null||typeof e!==\`object\`||Array.isArray(e))return{ok:!1,enabled:!1,error:\`invalid-request\`};
+  // Plain-Chat tool dispatch: tool_call is keyed by the conversation, not a
+  // Custom-GPT gizmo, so it bypasses the gizmo-registration gate. It still runs
+  // against the shared lifecycle host (and thus the same Hermes runtime/session)
+  // when a local Hermes is installed; otherwise the host returns enabled:false.
+  if(e.phase===\`tool_call\`){
+    let r={...e},cn=String(r.client_conversation_id||r.conversation_id||\`\`);
+    if(typeof r.session_id!==\`string\`||r.session_id.length===0){
+      let k=\`tool\\0${"${cn}"}\`,s=codexLinuxHermesLifecycleSessions.get(k);
+      s??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
+      codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId;
+    }
+    return await codexLinuxHermesHostRequest(r);
+  }
   let t=typeof e.gizmo_id===\`string\`?e.gizmo_id:\`\`,n=codexLinuxHermesAllowedGizmos();
   if(!t||!n.has(t))return{ok:!0,enabled:!1,reason:\`gizmo-not-registered\`};
   if(e.phase===\`probe\`)return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:process.env.CODEX_HERMES_QA_FAULT===\`model_call_error\`?\`model_call_error\`:null};
