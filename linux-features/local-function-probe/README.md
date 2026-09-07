@@ -51,3 +51,23 @@ The completed-turn view does NOT persist a visible expandable disclosure
 card for the call (no `.group/activity-header` in the finished thread).
 The round trip and result pairing work; persistent card rendering in the
 completed view is the open gate.
+
+## app25 iteration (round trip still green; persistent card still open)
+
+Changes:
+- viewer routes qa_local_echo to Bu ONLY while completed===!1; completed items
+  fall through to the generic el/chip disclosure renderer.
+- uGr local./functions. branches + item construction now propagate sourceTool.
+- eGr restores tool=sourceTool (qa_local_echo) when attaching result, and
+  records __codexLocalFnQaResultAttached / __codexLocalFnQaAttachedItem.
+
+Live (app25): norm=11, route=3, submitted=1 (toolName qa_local_echo,
+message LOCAL-QA-RESULT-73), attached=6, attachedItem.tool=qa_local_echo,
+continuation LOCAL-QA-RESULT-73. Round trip STILL works after routing change.
+
+OPEN: completed item is built ($Wr fires) and result attaches (eGr fires),
+but the finished turn renders only user/assistant messages — no persistent
+disclosure card. The handoff lifecycle consumes the transient executor item;
+the write-back u[D]=O stores the completed item, but it does not reach the
+rendered DOM. Next: trace the CGr turn container / hide_all group the
+completed item lands in.

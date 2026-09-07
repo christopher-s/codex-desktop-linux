@@ -51,7 +51,7 @@ function patchInitial(source) {
     "mark hidden local function result");
   out = replaceExactlyOnce(out,
     "function uGr(e){let t=PL(e.recipient);if(t?.startsWith(`functions.`)===!0){let e=t.slice(10);return{completed:!1,pairKey:`dynamic:${e}`,tool:e}}return t?.startsWith(`local.`)===!0?{completed:e.status!==`in_progress`,pairKey:null,tool:t.slice(6)}:null}",
-    "function uGr(e){let t=PL(e.recipient);if(t?.startsWith(`functions.`)===!0){let n=t.slice(10),r=n===`qa_local_echo`?`handoff`:n;n===`qa_local_echo`&&(globalThis.__codexLocalFnQaNormalized=(globalThis.__codexLocalFnQaNormalized??0)+1);return{completed:!1,pairKey:n===`qa_local_echo`?`local-function:${jL(e)}`:`dynamic:${n}`,sourceTool:n,tool:r}}return t?.startsWith(`local.`)===!0?(t.slice(6)===`qa_local_echo`&&(globalThis.__codexLocalFnQaNormalized=(globalThis.__codexLocalFnQaNormalized??0)+1),{completed:t.slice(6)===`qa_local_echo`?!1:e.status!==`in_progress`,pairKey:t.slice(6)===`qa_local_echo`?`local-function:${jL(e)}`:null,tool:t.slice(6)===`qa_local_echo`?`handoff`:t.slice(6)}):null}",
+    "function uGr(e){let t=PL(e.recipient);if(t?.startsWith(`functions.`)===!0){let n=t.slice(10),r=n===`qa_local_echo`?`handoff`:n;n===`qa_local_echo`&&(globalThis.__codexLocalFnQaNormalized=(globalThis.__codexLocalFnQaNormalized??0)+1);return{completed:!1,pairKey:n===`qa_local_echo`?`local-function:${jL(e)}`:`dynamic:${n}`,sourceTool:n,tool:r}}return t?.startsWith(`local.`)===!0?(t.slice(6)===`qa_local_echo`&&(globalThis.__codexLocalFnQaNormalized=(globalThis.__codexLocalFnQaNormalized??0)+1),{completed:t.slice(6)===`qa_local_echo`?!1:e.status!==`in_progress`,pairKey:t.slice(6)===`qa_local_echo`?`local-function:${jL(e)}`:null,sourceTool:t.slice(6),tool:t.slice(6)===`qa_local_echo`?`handoff`:t.slice(6)}):null}",
     "normalize QA call for native executor and pair by call id");
   out = replaceExactlyOnce(out,
     "function $Wr(e){let t=FL(e),n=_Tr(e),[r,i]=e.author.name?.split(`.`)??[];",
@@ -66,12 +66,16 @@ function patchInitial(source) {
     'var __cbtcP="__jit_plugin.",__cbtcIdx,__codexLocalFnQaEmbeddedTool;u=u==null&&typeof e.recipient==="string"&&(__cbtcIdx=e.recipient.indexOf(__cbtcP))!==-1&&__cbtcIdx+__cbtcP.length<e.recipient.length?((__codexLocalFnQaEmbeddedTool=e.recipient.slice(__cbtcIdx+__cbtcP.length)),globalThis.__codexLocalFnQaBridgeFallback=(globalThis.__codexLocalFnQaBridgeFallback??0)+1,globalThis.__codexLocalFnQaLastBridgeRecipient=e.recipient,__codexLocalFnQaEmbeddedTool===`qa_local_echo`?(globalThis.__codexLocalFnQaNormalized=(globalThis.__codexLocalFnQaNormalized??0)+1,{completed:!1,pairKey:`local-function:${jL(e)}`,sourceTool:__codexLocalFnQaEmbeddedTool,tool:`handoff`}):{completed:e.status!=="in_progress",pairKey:null,tool:__codexLocalFnQaEmbeddedTool}):u;/*codexLinuxChatBridgeToolCallsRuntime*/',
     "normalize embedded QA recipient before generic bridge fallback");
   out = replaceExactlyOnce(out,
+    "return e.author.role===`assistant`&&u!=null&&d.success?{completed:u.completed,item:{arguments:d.data,callId:jL(e),completed:u.completed,namespace:null,tool:u.tool,type:`dynamic-tool-call`},pairKey:u.pairKey}",
+    "return e.author.role===`assistant`&&u!=null&&d.success?{completed:u.completed,item:{arguments:d.data,callId:jL(e),completed:u.completed,namespace:null,sourceTool:u.sourceTool,tool:u.tool,type:`dynamic-tool-call`},pairKey:u.pairKey}",
+    "propagate sourceTool onto dynamic tool call item");
+  out = replaceExactlyOnce(out,
     "function rGr(e,t){let n=NL(NL(e.metadata)?.invoked_resource);if(e.author.role!==`tool`||n==null&&e.metadata?.chatgpt_sdk==null)return null;let r=t??AL(e),i;",
     "function rGr(e,t){if(e.author.role===`tool`&&e.metadata?.codex_local_function_result===!0){let n=t??AL(e);if(n!=null&&typeof n===`object`&&typeof n.call_id===`string`&&typeof n.tool===`string`)return{completed:!0,item:null,pairKey:`local-function:${n.call_id}`,rawPayload:n.result,localFunctionResult:!0}}let n=NL(NL(e.metadata)?.invoked_resource);if(e.author.role!==`tool`||n==null&&e.metadata?.chatgpt_sdk==null)return null;let r=t??AL(e),i;",
     "classify marked hidden local result");
   out = replaceExactlyOnce(out,
     "function eGr(e,t,n){let r=(t.pairKey==null?null:KWr(e,n))??t.item;return r==null?n?.item.type===`mcp-tool-call`?{...n,item:t.rawPayload===void 0&&t.error==null?{...n.item,completed:!0}:iGr({item:n.item,rawPayload:t.rawPayload,error:t.error,toolIcons:t.toolIcons}),sourceMessage:e}:null:{item:r,role:e.author.role===`assistant`?`assistant`:`tool`,sourceMessage:e,turnId:kL(e)??n?.turnId??null}}",
-    "function eGr(e,t,n){let r=(t.pairKey==null?null:KWr(e,n))??t.item;return r==null?t.localFunctionResult===!0&&n?.item.type===`dynamic-tool-call`?{...n,item:{...n.item,completed:!0,result:t.rawPayload},sourceMessage:e}:n?.item.type===`mcp-tool-call`?{...n,item:t.rawPayload===void 0&&t.error==null?{...n.item,completed:!0}:iGr({item:n.item,rawPayload:t.rawPayload,error:t.error,toolIcons:t.toolIcons}),sourceMessage:e}:null:{item:r,role:e.author.role===`assistant`?`assistant`:`tool`,sourceMessage:e,turnId:kL(e)??n?.turnId??null}}",
+    "function eGr(e,t,n){let r=(t.pairKey==null?null:KWr(e,n))??t.item;return r==null?t.localFunctionResult===!0&&n?.item.type===`dynamic-tool-call`?(globalThis.__codexLocalFnQaResultAttached=(globalThis.__codexLocalFnQaResultAttached??0)+1,globalThis.__codexLocalFnQaAttachedItem={tool:n.item.sourceTool??n.item.tool,callId:n.item.callId,result:t.rawPayload},{...n,item:{...n.item,completed:!0,result:t.rawPayload,tool:n.item.sourceTool??n.item.tool},sourceMessage:e}):n?.item.type===`mcp-tool-call`?{...n,item:t.rawPayload===void 0&&t.error==null?{...n.item,completed:!0}:iGr({item:n.item,rawPayload:t.rawPayload,error:t.error,toolIcons:t.toolIcons}),sourceMessage:e}:null:{item:r,role:e.author.role===`assistant`?`assistant`:`tool`,sourceMessage:e,turnId:kL(e)??n?.turnId??null}}",
     "attach marked result to dynamic tool call");
   return out;
 }
@@ -95,7 +99,7 @@ function patchViewer(source) {
   return replaceExactlyOnce(
     source,
     "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
-    `if(f.type===\`dynamic-tool-call\`){if(f.tool===\`handoff\`||f.tool===\`qa_local_echo\`){globalThis.__codexLocalFnQaViewerRouted=(globalThis.__codexLocalFnQaViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
+    `if(f.type===\`dynamic-tool-call\`){if(f.tool===\`handoff\`||f.tool===\`qa_local_echo\`&&f.completed===!1){globalThis.__codexLocalFnQaViewerRouted=(globalThis.__codexLocalFnQaViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
     "route incomplete QA local call through native executor",
   );
 }
