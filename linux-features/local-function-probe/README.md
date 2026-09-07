@@ -102,3 +102,29 @@ lifecycle, or re-emit a separate persistent disclosure item on completion).
 
 STATUS: round trip (protocol) = VERIFIED. Persistent card = blocked on
 handoff-lifecycle consumption; needs a dedicated follow-up.
+
+## app27 iteration — persistent card root cause fully characterized
+
+Live turn-data scan (completed turn):
+  status:"complete", turn.items = [user-message, chatgpt-reasoning-group, assistant-message]
+The reasoning-group IS present in the completed turn data, but its nested
+renderable items are empty and its recap is hide_all, so the Km component
+returns null and nothing visible mounts. No dynamic-tool-call fiber exists
+in the finished view.
+
+Attempted fixes (app27):
+- group-ctor: retain dynamic-tool-call member even when a recap is present
+  (items: recap==null || type===dynamic-tool-call ? [item] : []).
+- visibility gate: keep hidden reasoning group when source recipient is
+  qa_local_echo.
+Neither made the completed item reach Lm. Lm only ever sees the PENDING
+handoff item (completed:false, hasResult:false) during streaming.
+
+ROOT CAUSE (final): the completed call message is folded into a hide_all
+reasoning group whose renderable items are emptied by the recap; the
+transient native Bu executor consumes the pending handoff item during
+streaming, and after the handoff resolves, no standalone completed item is
+re-emitted into the visible turn. Round trip remains 100% functional
+(submitted=1, toolName qa_local_echo, LOCAL-QA-RESULT-73, continuation
+correct) — the gap is purely the persistent disclosure card, which requires
+re-emitting a completed standalone item or restructuring the recap grouping.

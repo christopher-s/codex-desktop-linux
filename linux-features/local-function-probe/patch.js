@@ -70,6 +70,14 @@ function patchInitial(source) {
     "return e.author.role===`assistant`&&u!=null&&d.success?{completed:u.completed,item:{arguments:d.data,callId:jL(e),completed:u.completed,namespace:null,sourceTool:u.sourceTool,tool:u.tool,type:`dynamic-tool-call`},pairKey:u.pairKey}",
     "propagate sourceTool onto dynamic tool call item");
   out = replaceExactlyOnce(out,
+    "t.push({hasTerminalReasoningStatus:mWr(r.sourceMessage),isVisuallyHiddenReasoningGroup:uWr(r.sourceMessage),item:{completed:!0,items:r.reasoningRecap==null?[cS(r.item)]:[],reasoningRecap:r.reasoningRecap,type:`chatgpt-reasoning-group`},role:`assistant`,sourceMessage:r.sourceMessage,turnId:r.turnId})",
+    "t.push({hasTerminalReasoningStatus:mWr(r.sourceMessage),isVisuallyHiddenReasoningGroup:uWr(r.sourceMessage),item:{completed:!0,items:r.reasoningRecap==null||r.item.type===`dynamic-tool-call`?[cS(r.item)]:[],reasoningRecap:r.reasoningRecap,type:`chatgpt-reasoning-group`},role:`assistant`,sourceMessage:r.sourceMessage,turnId:r.turnId})",
+    "retain dynamic-tool-call member even when recap present");
+  out = replaceExactlyOnce(out,
+    "let i=n.flatMap((e,t)=>{if(e.isVisuallyHiddenReasoningGroup===!0&&xz(e)&&Array.isArray(e.item.items)&&e.item.items.some(function(it){return it&&it.type===`dynamic-tool-call`}))e={...e,isVisuallyHiddenReasoningGroup:!1};/*codexLinuxChatBridgeToolCallsVisRuntime*/else if(e.isVisuallyHiddenReasoningGroup===!0)return[];",
+    "let i=n.flatMap((e,t)=>{if(e.isVisuallyHiddenReasoningGroup===!0&&xz(e)&&(Array.isArray(e.item.items)&&e.item.items.some(function(it){return it&&it.type===`dynamic-tool-call`})||typeof e.sourceMessage?.recipient===`string`&&e.sourceMessage.recipient.includes(`qa_local_echo`)))e={...e,isVisuallyHiddenReasoningGroup:!1};/*codexLinuxChatBridgeToolCallsVisRuntime*/else if(e.isVisuallyHiddenReasoningGroup===!0)return[];",
+    "keep hidden reasoning group for local function call");
+  out = replaceExactlyOnce(out,
     "function rGr(e,t){let n=NL(NL(e.metadata)?.invoked_resource);if(e.author.role!==`tool`||n==null&&e.metadata?.chatgpt_sdk==null)return null;let r=t??AL(e),i;",
     "function rGr(e,t){if(e.author.role===`tool`&&e.metadata?.codex_local_function_result===!0){let n=t??AL(e);if(n!=null&&typeof n===`object`&&typeof n.call_id===`string`&&typeof n.tool===`string`)return{completed:!0,item:null,pairKey:`local-function:${n.call_id}`,rawPayload:n.result,localFunctionResult:!0}}let n=NL(NL(e.metadata)?.invoked_resource);if(e.author.role!==`tool`||n==null&&e.metadata?.chatgpt_sdk==null)return null;let r=t??AL(e),i;",
     "classify marked hidden local result");
