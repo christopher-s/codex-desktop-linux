@@ -1,5 +1,9 @@
 # AGENTS.md
 
+Downstream `chris-custom` branch: see `docs/chris-custom-maintenance.md` for the
+upstream rebase workflow and `scripts/chris-custom-sync.sh` for the guided sync
+(origin fetch-only, fork push-only; run `tests/chris_custom_sync_test.sh`).
+
 ## Purpose
 
 This repository repackages OpenAI's signed official Linux `chatgpt` package as

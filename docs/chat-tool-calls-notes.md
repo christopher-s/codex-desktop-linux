@@ -1,9 +1,9 @@
 # Chat Tool-Call Surfacing: Approach and Gotchas
 
-Notes from building `chat-tool-calls` and `chat-bridge-tool-calls`
-(`feature/chat-tool-calls` through `b2f8d13`, upstream 26.901.x /
-codex-desktop `2026.09.05.184604`). Two audiences: anyone re-deriving this
-after an upstream rewrite, and anyone extending the technique to other
+Notes from building `chat-tool-calls` and `chat-bridge-tool-calls` on the
+downstream `chris-custom` branch. See `chris-custom-maintenance.md` for the
+upstream rebase and fork-only push workflow. Two audiences: anyone re-deriving
+this after an upstream rewrite, and anyone extending the technique to other
 dropped event types.
 
 ## The problem
