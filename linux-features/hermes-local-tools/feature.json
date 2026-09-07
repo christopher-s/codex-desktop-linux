@@ -1,0 +1,9 @@
+{
+  "id": "hermes-local-tools",
+  "title": "Hermes tools via local function protocol (Phase 1 proof)",
+  "description": "Advertises deterministic Hermes tools through the client-local function protocol in ordinary Chat and executes them locally in-process via a loopback HTTP endpoint. No custom GPT, no bridge.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js"
+  }
+}
