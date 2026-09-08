@@ -1,9 +1,9 @@
 # Hermes Lifecycle for ChatGPT Chat Mode in Codex Desktop
 
-Status: active architecture + roadmap; phases 0–5 implemented and runtime-verified  
-Branch: `chris-custom` (tracking `fork/chris-custom`)  
-Scope: Codex Desktop ChatGPT Chat mode, only for explicitly registered Custom GPT/Gizmo IDs that use Hermes tooling  
-Out of scope for this phase: modifying `/home/chris/Projects/hermes-chatgpt`  
+Status: active architecture + roadmap; phases 0–5 implemented and runtime-verified\
+Branch: `chris-custom` (tracking `fork/chris-custom`)\
+Scope: Codex Desktop ChatGPT Chat mode, only for explicitly registered Custom GPT/Gizmo IDs that use Hermes tooling\
+Out of scope for this phase: modifying `/home/chris/Projects/hermes-chatgpt`\
 Verified implementation/QA record: [`hermes-chat-lifecycle-status.md`](./hermes-chat-lifecycle-status.md)
 
 ## Objective

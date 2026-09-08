@@ -1,10 +1,10 @@
 # Hermes Chat Lifecycle — Implementation Status
 
-Last updated: 2026-09-06  
-Branch: `chris-custom` (tracking `fork/chris-custom`)  
-Repository: `/home/chris/Projects/codex-desktop-linux`  
-Upstream ChatGPT package used for QA: `26.901.41600`  
-Current QA candidate: `/home/chris/Projects/codex-desktop-linux/codex-app-next`  
+Last updated: 2026-09-07\
+Branch: `chris-custom` (tracking `fork/chris-custom`)\
+Repository: `/home/chris/Projects/codex-desktop-linux`\
+Upstream ChatGPT package used for QA: `26.901.41600`\
+Current QA candidate: `/home/chris/Projects/codex-desktop-linux/codex-app-next`\
 Bridge policy: `/home/chris/Projects/hermes-chatgpt` remains read-only until coordinated separately.
 
 ## Executive summary

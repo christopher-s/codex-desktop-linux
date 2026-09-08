@@ -4,7 +4,7 @@ Opt-in Codex Desktop integration that surrounds eligible ChatGPT Custom GPT turn
 
 The feature is disabled by default and is intentionally scoped to exact registered Custom GPT/Gizmo IDs.
 
-Architecture and roadmap: [`../../docs/hermes-chat-lifecycle-plan.md`](../../docs/hermes-chat-lifecycle-plan.md)  
+Architecture and roadmap: [`../../docs/hermes-chat-lifecycle-plan.md`](../../docs/hermes-chat-lifecycle-plan.md)\
 Verified implementation and QA record: [`../../docs/hermes-chat-lifecycle-status.md`](../../docs/hermes-chat-lifecycle-status.md)
 
 ## Activation
