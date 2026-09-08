@@ -66,6 +66,7 @@ git rebase "$UPSTREAM_REMOTE/main"
 
 printf '[chris-custom-sync] Running branch validation\n'
 node --test linux-features/chat-bridge-tool-calls/test.js
+node --test linux-features/hermes-chat-lifecycle/test.js
 node --test scripts/lib/linux-features.test.js
 bash -n "$0" tests/chris_custom_sync_test.sh
 tests/chris_custom_sync_test.sh

@@ -52,9 +52,13 @@ async function codexLinuxHermesLifecycleInvoke(e){
   // Custom-GPT gizmo, so it bypasses the gizmo-registration gate. It still runs
   // against the shared lifecycle host (and thus the same Hermes runtime/session)
   // when a local Hermes is installed; otherwise the host returns enabled:false.
+  // Session identity is host-owned: a missing or non-canonical (non hs_codex_*)
+  // session id is key-mapped to a process-local session and normalized, so the
+  // host never stores a raw conversation id as a session id.
   if(e.phase===\`tool_call\`){
     let r={...e},cn=String(r.client_conversation_id||r.conversation_id||\`\`);
-    if(typeof r.session_id!==\`string\`||r.session_id.length===0){
+    if(cn){r.client_conversation_id=cn;r.conversation_id=cn}
+    if(typeof r.session_id!==\`string\`||r.session_id.length===0||r.session_id.indexOf(\`hs_codex_\`)!==0){
       let k=\`tool\\0${"${cn}"}\`,s=codexLinuxHermesLifecycleSessions.get(k);
       s??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
       codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId;

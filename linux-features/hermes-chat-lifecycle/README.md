@@ -180,12 +180,27 @@ Main process:
 - `tool_call` bypasses the gizmo-registration gate (it is keyed by the
   conversation, not a gizmo) and auto-creates a process-local
   `hs_codex_<uuid>` session keyed by `tool\0<conversation_id>`, so a bare
-  `conversationId` is sufficient.
-- The request is forwarded to the host; the host lazily boots
-  `model_tools` (the same registry instance the lifecycle session uses),
-  strips the model-facing `hermes_` prefix to reach the registry tool of the
-  same bare name, calls `model_tools.handle_function_call`, and returns the
-  parsed result plus a `tool_call` diagnostic event.
+  `conversationId` is sufficient. A payload `session_id` that is missing or
+  not a canonical `hs_codex_*` id (for example a raw conversation id) is
+  re-mapped onto that conversation-keyed session, so the host never stores a
+  conversation id as a session id and tool turns merge into the
+  conversation's lifecycle `SessionRuntime`.
+
+Host:
+
+- Lazily boots `model_tools` (the same registry instance the lifecycle
+  session uses) and maps the advertised name: `hermes_tool_search`,
+  `hermes_tool_describe`, and `hermes_tool_call` map onto Hermes's native
+  Tool Search bridge (progressive disclosure over the full registry; the
+  bridge is never a registry entry, so it is checked before the registry
+  set); `hermes_<bare>` strips the prefix when `<bare>` is a registered
+  tool; anything else is passed through so the registry's own "Unknown
+  tool" error surfaces truthfully.
+- Calls `model_tools.handle_function_call` with the session, task, and
+  tool-call ids, records the executed call as a `tool_call` + `tool` row
+  pair in the runtime transcript (failed calls are reported to the model
+  but excluded from the transcript), and returns the parsed result plus a
+  `tool_call` diagnostic event (`tool_call_error` for failures).
 
 When the local Hermes runtime is not installed, `tool_call` answers
 `{ok:false, enabled:false}` instead of raising, so plain-Chat turns proceed

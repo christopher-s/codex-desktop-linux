@@ -7,16 +7,25 @@ tools by name inside an ordinary Chat conversation.
 
 ## Advertised tools
 
-Three bare tools are advertised (table form in the signature builder):
+A curated bare core (table form in the signature builder):
 
 - `hermes_read_file`  → registry `read_file`
 - `hermes_search_files` → registry `search_files`
 - `hermes_web_search` → registry `web_search`
 
+plus Hermes's progressive-disclosure trio, which mirrors the native
+`tool_search` / `tool_describe` / `tool_call` bridge (the host maps
+`hermes_tool_*` onto it; string-only arguments are acceptable and the bridge
+parses them internally):
+
+- `hermes_tool_search`   → discover the rest of the registry by description
+- `hermes_tool_describe` → read a candidate's parameter schema
+- `hermes_tool_call`     → execute any named registry tool
+
 The `hermes_` prefix is model-facing only (avoids collision with built-in
-local functions). Dispatch strips it to reach the registry tool of the same
-bare name; if the bare name is not registered, the advertised name is used so
-the registry's own "Unknown tool" error surfaces truthfully.
+local functions). Dispatch strips it for known bare tools and for the bridge
+names; anything else is passed through so the registry's own "Unknown tool"
+error surfaces truthfully.
 
 ## Dispatch path (Path A)
 
@@ -41,6 +50,18 @@ This requires the `hermes-chat-lifecycle` feature to be enabled so the
 absent (feature disabled), the executor falls back to the **loopback HTTP tool
 endpoint** (`127.0.0.1:9473/call`, owned by the `hermes-local-tools` feature)
 to stay functional on its own.
+
+## Session unification and transcript recording
+
+Plain-Chat tool calls are keyed by the conversation, so a tool-call-only
+turn merges into the same lifecycle `SessionRuntime` as the conversation's
+user/assistant turns (the host derives the session identity from the
+conversation; the client's raw conversation id is never stored as a session
+id, and a non-canonical session id in the payload is re-mapped). Every
+executed call is appended to the runtime's transcript as a `tool_call` +
+`tool` row pair, so the conversation's Hindsight sync and LCM ingestion see
+the tool activity; failed calls (registry "Unknown tool") are reported to
+the model but deliberately excluded from the transcript.
 
 ## Why no dispatcher
 

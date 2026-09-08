@@ -46,6 +46,27 @@ const TOOLS = [
     desc: "Search the web for current information. Call when the user asks a factual or current-events question.",
     params: [{ name: "query", required: true, type: "string", pdesc: "The search query" }],
   },
+  {
+    sig: "hermes_tool_search",
+    call: "tool_search",
+    desc: "Search the available Hermes tool catalog by description fragments and return matching tool names plus brief descriptions. Use to discover tools beyond the three always-visible ones (read_file, search_files, web_search).",
+    params: [{ name: "queries", required: true, type: "string", pdesc: "One or more short description fragments, separated by commas" }],
+  },
+  {
+    sig: "hermes_tool_describe",
+    call: "tool_describe",
+    desc: "Get the full parameter schema for named Hermes tools. Call after hermes_tool_search finds candidate names, before calling hermes_tool_call on them.",
+    params: [{ name: "names", required: true, type: "string", pdesc: "One or more tool names, separated by commas" }],
+  },
+  {
+    sig: "hermes_tool_call",
+    call: "tool_call",
+    desc: "Execute a named Hermes tool with its arguments. Use for any capability not covered by the three always-visible tools, after locating it with hermes_tool_search and reading its schema with hermes_tool_describe.",
+    params: [
+      { name: "name", required: true, type: "string", pdesc: "The Hermes tool name to execute" },
+      { name: "arguments", required: false, type: "string", pdesc: "JSON object string of the tool's arguments" },
+    ],
+  },
 ];
 
 const SIG_NAMES = TOOLS.map((t) => t.sig);

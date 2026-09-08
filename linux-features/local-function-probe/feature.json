@@ -1,7 +1,7 @@
 {
   "id": "local-function-probe",
   "title": "Hermes tools via client-local function protocol",
-  "description": "Advertises bare Hermes tools (read_file, search_files, web_search) through the client-local function protocol and dispatches each call to the shared Hermes runtime: preferentially over the hermes-chat-lifecycle IPC (phase=tool_call, conversation-keyed, no gizmo required), falling back to the loopback HTTP tool endpoint when the lifecycle bridge is absent.",
+  "description": "Advertises the Hermes tool surface through the client-local function protocol: a curated bare core (read_file, search_files, web_search) plus the progressive-disclosure meta-tools (hermes_tool_search / hermes_tool_describe / hermes_tool_call, mapped onto Hermes's native Tool Search bridge). Each call dispatches to the shared Hermes runtime: preferentially over the hermes-chat-lifecycle IPC (phase=tool_call, conversation-keyed, no gizmo required), falling back to the loopback HTTP tool endpoint when the lifecycle bridge is absent.",
   "defaultEnabled": false,
   "entrypoints": {
     "patchDescriptors": "./patch.js"

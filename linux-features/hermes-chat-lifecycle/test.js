@@ -673,3 +673,245 @@ test("persistent helper preserves one session runtime across multiple turns", as
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("persistent helper records tool_call phases into the shared transcript (plain Chat, no gizmo)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-toolcall-"));
+  let child = null;
+  try {
+    writeFakeDaemonPool(root);
+    const hermesCli = path.join(root, "hermes_cli");
+    const agentDir = path.join(root, "agent");
+    const pluginsMemoryDir = path.join(root, "plugins", "memory");
+    fs.mkdirSync(hermesCli, { recursive: true });
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(pluginsMemoryDir, { recursive: true });
+    for (const packageDir of [hermesCli, agentDir, path.join(root, "plugins")]) {
+      fs.writeFileSync(path.join(packageDir, "__init__.py"), "", "utf8");
+    }
+    fs.writeFileSync(
+      path.join(hermesCli, "lifecycle.py"),
+      [
+        "def invoke_hook(name, **kwargs):",
+        "    return []",
+        "def finalize_session(**kwargs):",
+        "    return []",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(hermesCli, "config.py"),
+      [
+        "def load_config():",
+        "    return {'memory': {'provider': 'fake'}}",
+        "def cfg_get(cfg, *keys, default=None):",
+        "    node = cfg",
+        "    for key in keys:",
+        "        if not isinstance(node, dict) or key not in node:",
+        "            return default",
+        "        node = node[key]",
+        "    return node",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(hermesCli, "profiles.py"), "def get_active_profile_name():\n    return 'test-profile'\n", "utf8");
+    fs.writeFileSync(path.join(hermesCli, "plugins.py"), "def get_plugin_context_engine():\n    return None\n", "utf8");
+    fs.writeFileSync(path.join(agentDir, "memory_provider.py"), "def is_trivial_prompt(text):\n    return False\n", "utf8");
+    fs.writeFileSync(
+      path.join(agentDir, "memory_manager.py"),
+      [
+        "def build_memory_context_block(raw_context):",
+        "    return ''",
+        "class MemoryManager:",
+        "    def __init__(self):",
+        "        pass",
+        "    def add_provider(self, provider):",
+        "        pass",
+        "    def initialize_all(self, **kwargs):",
+        "        pass",
+        "    def on_turn_start(self, turn_number, prompt, **kwargs):",
+        "        pass",
+        "    def build_system_prompt(self):",
+        "        return ''",
+        "    def prefetch_all(self, prompt, **kwargs):",
+        "        return ''",
+        "    def sync_all(self, user, assistant, **kwargs):",
+        "        pass",
+        "    def on_session_end(self, history):",
+        "        import json, os",
+        "        p = os.path.join(os.environ.get('CODEX_LINUX_APP_STATE_DIR', '.'), 'session-end-history.json')",
+        "        with open(p, 'a', encoding='utf-8') as f:",
+        "            f.write(json.dumps({'history': history}) + '\\n')",
+        "    def shutdown_all(self):",
+        "        pass",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginsMemoryDir, "__init__.py"),
+      [
+        "class FakeProvider:",
+        "    def is_available(self):",
+        "        return True",
+        "def load_memory_provider(name):",
+        "    return FakeProvider() if name == 'fake' else None",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(root, "hermes_constants.py"), "def get_hermes_home():\n    return '.'\n", "utf8");
+    // Fake registry: two bare tools plus the three bridge names (bridge names are
+    // intercepted before the registry by handle_function_call, which this fake
+    // mirrors by serving them directly from the same entry point).
+    fs.writeFileSync(
+      path.join(root, "model_tools.py"),
+      [
+        "import json, os",
+        "def discover_builtin_tools():",
+        "    pass",
+        "def get_all_tool_names():",
+        "    return ['read_file', 'search_files', 'web_search']",
+        "def handle_function_call(function_name, function_args, task_id=None, tool_call_id=None, session_id=None, turn_id=None, **kwargs):",
+        "    p = os.path.join(os.environ.get('CODEX_LINUX_APP_STATE_DIR', '.'), 'tool-exec.jsonl')",
+        "    with open(p, 'a', encoding='utf-8') as f:",
+        "        f.write(json.dumps({'name': function_name, 'args': function_args, 'task_id': task_id, 'session_id': session_id, 'tool_call_id': tool_call_id}) + '\\n')",
+        "    if function_name == 'tool_search':",
+        "        return json.dumps({'queries': ['x'], 'total_available': 1, 'results': [{'query': 'x', 'matches': ['read_file']}], 'tools': {}})",
+        "    if function_name == 'tool_describe':",
+        "        return json.dumps({'tools': {'read_file': {'description': 'd', 'parameters': {}}}})",
+        "    if function_name == 'tool_call':",
+        "        return json.dumps({'ok': True, 'underlying': function_args.get('name')})",
+        "    if function_name not in get_all_tool_names():",
+        "        raise ValueError('Unknown tool: ' + function_name)",
+        "    return json.dumps({'content': 'FAKE-RESULT-' + function_name})",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const stateDir = path.join(root, "state");
+    const env = isolatedHermesPythonEnv({ HERMES_AGENT_ROOT: root, CODEX_LINUX_APP_STATE_DIR: stateDir });
+    child = spawn("python3", [HELPER, "--persistent"], { env, stdio: ["pipe", "pipe", "pipe"] });
+    let buffer = "";
+    const waiting = [];
+    child.stdout.on("data", (chunk) => {
+      buffer += String(chunk);
+      for (;;) {
+        const index = buffer.indexOf("\n");
+        if (index < 0) break;
+        const line = buffer.slice(0, index);
+        buffer = buffer.slice(index + 1);
+        if (!line.trim()) continue;
+        const resolve = waiting.shift();
+        if (resolve) resolve(JSON.parse(line));
+      }
+    });
+    const request = (payload, requestId) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("persistent helper response timeout")), 5_000);
+      waiting.push((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      });
+      child.stdin.write(`${JSON.stringify({ ...payload, _request_id: requestId })}\n`);
+    });
+
+    const toolCall = {
+      phase: "tool_call",
+      name: "hermes_read_file",
+      arguments: { path: "/tmp/fixture" },
+      callId: "call-1",
+      conversationId: "conversation-1",
+      session_id: "hs_codex_tooltest1",
+      client_conversation_id: "conversation-1",
+      conversation_id: "conversation-1",
+    };
+
+    // 1) bare registry tool: executes, records tool_call + tool rows.
+    const r1 = await request(toolCall, "1");
+    assert.equal(r1.ok, true, JSON.stringify(r1));
+    assert.equal(r1.phase, "tool_call");
+    assert.equal(r1.name, "hermes_read_file");
+    assert.equal(r1.registry_name, "read_file");
+    assert.equal(r1.session_id, "hs_codex_tooltest1");
+    assert.deepEqual(r1.result, { content: "FAKE-RESULT-read_file" });
+    assert.equal(r1.history_messages, 2);
+
+    // 2) bridge meta-tool: the hermes_ prefix maps onto the bridge dispatch.
+    const r2 = await request({ ...toolCall, name: "hermes_tool_search", arguments: { queries: "read" }, callId: "call-2" }, "2");
+    assert.equal(r2.ok, true, JSON.stringify(r2));
+    assert.equal(r2.registry_name, "tool_search");
+    assert.equal(r2.session_id, "hs_codex_tooltest1");
+    assert.equal(r2.history_messages, 4);
+    assert.equal(r2.result.total_available, 1);
+
+    // 3) unknown advertised name: truthful registry error, transcript untouched.
+    const r3 = await request({ ...toolCall, name: "hermes_does_not_exist", arguments: {}, callId: "call-3" }, "3");
+    assert.equal(r3.ok, false, JSON.stringify(r3));
+    assert.equal(r3.enabled, true);
+    assert.match(r3.error, /Unknown tool/);
+    assert.equal(r3.history_messages, 4);
+
+    // 4) close_session delivers the accumulated transcript to on_session_end.
+    const close = await request({ phase: "close_session", session_id: "hs_codex_tooltest1", conversation_id: "conversation-1", reason: "qa" }, "4");
+    assert.equal(close.ok, true);
+
+    // 5) a different conversation gets a distinct runtime.
+    const r5 = await request({ ...toolCall, conversationId: "conversation-2", session_id: "hs_codex_tooltest2", client_conversation_id: "conversation-2", conversation_id: "conversation-2", callId: "call-4" }, "5");
+    assert.equal(r5.ok, true, JSON.stringify(r5));
+    assert.equal(r5.session_id, "hs_codex_tooltest2");
+    assert.equal(r5.history_messages, 2);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    child.stdin.end();
+    await new Promise((resolve, reject) => {
+      child.once("exit", resolve);
+      child.once("error", reject);
+    });
+
+    // Executed registry calls: bare + bridge only; the unknown tool was refused
+    // before execution; identity fields carried through.
+    const execs = fs.readFileSync(path.join(stateDir, "tool-exec.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(
+      execs.map((e) => [e.name, e.session_id, e.tool_call_id]),
+      [
+        ["read_file", "hs_codex_tooltest1", "call-1"],
+        ["tool_search", "hs_codex_tooltest1", "call-2"],
+        // The unknown hermes_* name is a pass-through: it reaches the registry
+        // under its advertised name (prefix not stripped, because it is not a
+        // known tool) and the registry's own "Unknown tool" error is surfaced.
+        ["hermes_does_not_exist", "hs_codex_tooltest1", "call-3"],
+        ["read_file", "hs_codex_tooltest2", "call-4"],
+      ],
+    );
+    assert.equal(execs[0].task_id, "chatgpt-codex:hs_codex_tooltest1");
+
+    // Session close delivered the tool transcript to the memory provider.
+    const endHistories = fs.readFileSync(path.join(stateDir, "session-end-history.json"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line).history);
+    assert.equal(endHistories.length, 2);
+    assert.deepEqual(
+      endHistories[0].map((m) => [m.role, m.tool_name, m.tool_call_id]),
+      [
+        ["tool_call", "read_file", "call-1"],
+        ["tool", "read_file", "call-1"],
+        ["tool_call", "tool_search", "call-2"],
+        ["tool", "tool_search", "call-2"],
+      ],
+    );
+    assert.equal(endHistories[0][0].content, "read_file");
+    assert.equal(endHistories[0][0].args.path, "/tmp/fixture");
+    assert.deepEqual(endHistories[1].map((m) => [m.role, m.tool_name]), [["tool_call", "read_file"], ["tool", "read_file"]]);
+
+    // Diagnostics log the calls with the host-owned session identity.
+    const events = fs.readFileSync(path.join(stateDir, "hermes-chat-lifecycle.jsonl"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(events.filter((event) => event.event === "tool_call").length, 3);
+    assert.equal(events.filter((event) => event.event === "tool_call_error").length, 1);
+    assert.equal(events.filter((event) => event.event === "session_open").length, 2);
+    const openEvents = events.filter((event) => event.event === "session_open");
+    assert.equal(openEvents[0].conversation_id, "conversation-1");
+    assert.equal(openEvents[1].conversation_id, "conversation-2");
+  } finally {
+    if (child && child.exitCode == null && !child.killed) child.kill("SIGKILL");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

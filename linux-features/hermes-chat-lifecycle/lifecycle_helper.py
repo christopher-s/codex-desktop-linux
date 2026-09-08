@@ -320,7 +320,7 @@ def _monitor_background_review(run: Any, metadata: dict[str, Any]) -> None:
 
 
 def _maybe_schedule_skill_review(
-    runtime: "SessionRuntime", payload: dict[str, Any], history: list[dict[str, str]],
+    runtime: "SessionRuntime", payload: dict[str, Any], history: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if not _env_enabled("CODEX_HERMES_BACKGROUND_REVIEW", default=True):
         return {"scheduled": False, "reason": "disabled"}
@@ -455,7 +455,7 @@ class SessionRuntime:
     turn_number: int = 0
     api_call_count: int = 0
     api_requests: dict[str, dict[str, Any]] = field(default_factory=dict)
-    history: list[dict[str, str]] = field(default_factory=list)
+    history: list[dict[str, Any]] = field(default_factory=list)
     review_iterations_since_skill: int = 0
     skill_review_count: int = 0
     qa_forced_review_consumed: bool = False
@@ -654,7 +654,7 @@ def _collect_context(results: Any) -> str:
     return "\n\n".join(chunks)
 
 
-def _turn_history(runtime: SessionRuntime, user_text: str, assistant_text: str = "") -> list[dict[str, str]]:
+def _turn_history(runtime: SessionRuntime, user_text: str, assistant_text: str = "") -> list[dict[str, Any]]:
     history = list(runtime.history)
     if user_text:
         history.append({"role": "user", "content": user_text})
@@ -1090,6 +1090,33 @@ def _complete_turn(payload: dict[str, Any], runtime: SessionRuntime) -> dict[str
     }
 
 
+# Hermes's Tool Search bridge tools (tools/tool_search.py). They are bridge
+# names, never registry entries, so the advertised `hermes_`-prefixed surface
+# maps them onto the bridge dispatch in model_tools.handle_function_call.
+BRIDGE_TOOL_NAMES = frozenset({"tool_search", "tool_describe", "tool_call"})
+
+
+def _ensure_tool_session(session_id: str, conversation_id: str) -> SessionRuntime:
+    """Get-or-create the lifecycle runtime that owns plain-Chat tool calls.
+
+    The main-bundle `tool_call` branch always key-maps the conversation to an
+    `hs_codex_*` session, so this normally finds an existing runtime. If the
+    host received a conversation-keyed payload without a session id (defensive:
+    older probes or direct IPC), a session is derived here instead of failing
+    the call. The runtime is the same object gizmo turns use, so tool calls
+    accumulate into the same transcript that close_session finalizes.
+
+    The payload is sanitized to the client conversation id only: the tool_call
+    IPC carries no server conversation id and no model, and an existing
+    runtime's server identity must not be overwritten by the client id.
+    """
+    key = session_id or (f"tool\0{conversation_id}" if conversation_id else "")
+    if not key:
+        raise ValueError("session_id or conversation_id is required")
+    payload = {"client_conversation_id": conversation_id} if conversation_id else None
+    return _session(key, payload)
+
+
 def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute a Hermes tool in this shared process and return its result.
 
@@ -1098,6 +1125,19 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
     same Hermes runtime (and is recorded into the same LCM transcript) that the
     lifecycle session maintains. Works in plain Chat: the session is keyed by
     the conversation, not a Custom-GPT gizmo.
+
+    Three kinds of advertised names reach the host:
+    - `hermes_<bare>` where `<bare>` is a registry tool (prefix stripped);
+    - `hermes_tool_search` / `hermes_tool_describe` / `hermes_tool_call`,
+      which map onto Hermes's native Tool Search bridge (progressive
+      disclosure over the full registry; string arguments are acceptable and
+      the bridge handles them internally);
+    - bare names, passed through so registry errors surface truthfully.
+
+    Every executed call is appended to the session runtime's transcript
+    (tool_call + tool-result rows) so the conversation's Hindsight sync and
+    LCM ingestion see the tool activity, and `handle_function_call` receives
+    the session and call ids for its hook identity fields.
     """
     name = payload.get("name")
     args = payload.get("arguments") or {}
@@ -1106,41 +1146,83 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(args, dict):
         return {"ok": False, "enabled": True, "phase": "tool_call", "error": "arguments-not-object"}
 
-    # Strip the model-facing `hermes_` prefix to reach the bare registry tool,
-    # mirroring the advertised surface; fall back to the advertised name so the
-    # registry's own "Unknown tool" error surfaces truthfully.
+    # Map the advertised name: bridge names first (they are never registry
+    # entries, so the registry set can never contain them), then the
+    # model-facing `hermes_` prefix strip to a bare registry tool; anything
+    # else passes through so the registry's own "Unknown tool" error
+    # surfaces truthfully.
     registry_name = name
     try:
         mt = _load_model_tools()
         if name.startswith("hermes_"):
             bare = name[len("hermes_"):]
-            if bare in set(mt.get_all_tool_names()):
+            if bare in BRIDGE_TOOL_NAMES:
+                registry_name = bare
+            elif bare in set(mt.get_all_tool_names()):
                 registry_name = bare
     except HermesUnavailable as exc:
         return {"ok": False, "enabled": False, "phase": "tool_call", "name": name, "error": str(exc)}
 
-    session_id = str(payload.get("session_id") or "")
     conversation_id = str(payload.get("conversation_id") or payload.get("client_conversation_id") or "")
-    task_id = f"chatgpt-codex:{session_id or conversation_id or 'tool'}"
+    session_id = str(payload.get("session_id") or "")
+    try:
+        runtime = _ensure_tool_session(session_id, conversation_id)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "enabled": True,
+            "phase": "tool_call",
+            "name": name,
+            "registry_name": registry_name,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    session_id = runtime.session_id
+    task_id = f"chatgpt-codex:{session_id}"
+    tool_call_id = str(payload.get("callId") or payload.get("tool_call_id") or "")
 
     started = time.time()
     try:
-        out = mt.handle_function_call(registry_name, args, task_id=task_id)
+        out = mt.handle_function_call(
+            registry_name, args, task_id=task_id, session_id=session_id, tool_call_id=tool_call_id
+        )
         try:
             result = json.loads(out)
         except Exception:  # noqa
             result = out
+        # Record the executed call and its result in the shared transcript:
+        # the row shape matches Hermes's own tool-call/tool-result pairs, so
+        # LCM ingestion (store.append) and Hindsight sync see the activity.
+        runtime.history.append(
+            {
+                "role": "tool_call",
+                "content": registry_name,
+                "tool_name": registry_name,
+                "tool_call_id": tool_call_id,
+                "args": args,
+                "timestamp": started,
+            }
+        )
+        runtime.history.append(
+            {
+                "role": "tool",
+                "content": str(result),
+                "tool_name": registry_name,
+                "tool_call_id": tool_call_id,
+                "timestamp": time.time(),
+            }
+        )
         elapsed_ms = int((time.time() - started) * 1000)
         _log(
             {
                 "event": "tool_call",
                 "session_id": session_id,
-                "conversation_id": conversation_id,
+                "conversation_id": runtime.conversation_id,
                 "name": name,
                 "registry_name": registry_name,
                 "ok": True,
                 "elapsed_ms": elapsed_ms,
                 "arg_keys": sorted(args.keys()),
+                "history_messages": len(runtime.history),
             }
         )
         return {
@@ -1149,8 +1231,10 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             "phase": "tool_call",
             "name": name,
             "registry_name": registry_name,
+            "session_id": session_id,
             "result": result,
             "elapsed_ms": elapsed_ms,
+            "history_messages": len(runtime.history),
         }
     except Exception as exc:  # noqa
         elapsed_ms = int((time.time() - started) * 1000)
@@ -1158,7 +1242,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "event": "tool_call_error",
                 "session_id": session_id,
-                "conversation_id": conversation_id,
+                "conversation_id": runtime.conversation_id,
                 "name": name,
                 "registry_name": registry_name,
                 "error": f"{type(exc).__name__}: {exc}",
@@ -1171,8 +1255,10 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             "phase": "tool_call",
             "name": name,
             "registry_name": registry_name,
+            "session_id": session_id,
             "error": f"{type(exc).__name__}: {exc}",
             "elapsed_ms": elapsed_ms,
+            "history_messages": len(runtime.history),
         }
 
 
