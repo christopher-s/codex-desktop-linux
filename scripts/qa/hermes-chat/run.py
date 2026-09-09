@@ -385,27 +385,64 @@ async def _e5_turns(
     marker_two: str,
 ) -> tuple[str, str]:
     target = wait_for_shell_target(config.host, config.port)
+    client_id = ""
+    server_id = ""
+    expected_names = ["hermes_tool_search", "hermes_tool_describe", "hermes_tool_call"]
+
     async with CDPClient(target, host=config.host, port=config.port) as client:
         await chat.new_chat(client, timeout=45)
-        turn_one = await chat.send_and_wait(
-            client,
-            _process_list_prompt(marker_one),
-            complete_timeout=300,
-        )
-        if not turn_one.accepted or not turn_one.completed:
-            raise AssertionError(f"E5 turn 1 did not complete: {turn_one}")
-        run.record("e5_turn_one", marker=marker_one, seconds=turn_one.seconds, after=turn_one.after)
+        for logical_turn, marker in enumerate((marker_one, marker_two), start=1):
+            for attempt in range(1, 4):
+                attempt_marker = marker if attempt == 1 else f"{marker}-RETRY{attempt - 1}"
+                before_events = lifecycle.events_since(baseline)
+                before_tool_count = len(
+                    [event for event in before_events if event.get("event") == "tool_call"]
+                )
+                result = await chat.send_and_wait(
+                    client,
+                    _process_list_prompt(attempt_marker),
+                    complete_timeout=300,
+                )
+                if not result.accepted or not result.completed:
+                    raise AssertionError(
+                        f"E5 logical turn {logical_turn} attempt {attempt} did not complete: {result}"
+                    )
 
-        client_id, server_id, _events = await _wait_for_identity_pair(lifecycle, baseline)
+                after_events = lifecycle.events_since(baseline)
+                new_tool_events = [
+                    event
+                    for event in after_events
+                    if event.get("event") == "tool_call"
+                ][before_tool_count:]
+                names = [str(event.get("name") or "") for event in new_tool_events]
+                run.record(
+                    "e5_turn_attempt",
+                    logical_turn=logical_turn,
+                    attempt=attempt,
+                    marker=attempt_marker,
+                    seconds=result.seconds,
+                    tool_names=names,
+                    after=result.after,
+                )
 
-        turn_two = await chat.send_and_wait(
-            client,
-            _process_list_prompt(marker_two),
-            complete_timeout=300,
-        )
-        if not turn_two.accepted or not turn_two.completed:
-            raise AssertionError(f"E5 turn 2 did not complete: {turn_two}")
-        run.record("e5_turn_two", marker=marker_two, seconds=turn_two.seconds, after=turn_two.after)
+                if names == expected_names:
+                    if not client_id:
+                        client_id, server_id, _events = await _wait_for_identity_pair(
+                            lifecycle,
+                            baseline,
+                        )
+                    break
+                if names:
+                    raise AssertionError(
+                        f"E5 logical turn {logical_turn} attempt {attempt} produced unexpected tool sequence: {names}"
+                    )
+            else:
+                raise AssertionError(
+                    f"E5 logical turn {logical_turn} exhausted three completed model attempts without Hermes tool execution"
+                )
+
+    if not client_id or not server_id:
+        raise AssertionError("E5 completed tool turns without resolving a client/server identity pair")
     return client_id, server_id
 
 
