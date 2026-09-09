@@ -58,7 +58,7 @@ class LCMDatabase:
 
     def total_messages(self) -> int:
         with self._connect() as connection:
-            return int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+            return int(connection.execute("SELECT COUNT(*) FROM messages NOT INDEXED").fetchone()[0])
 
     def rows(self, conversation_id: str) -> list[LCMRow]:
         with self._connect() as connection:
@@ -66,7 +66,7 @@ class LCMDatabase:
                 """
                 SELECT rowid AS qa_rowid, store_id, session_id, role, content, tool_call_id,
                        tool_name, conversation_id
-                FROM messages
+                FROM messages NOT INDEXED
                 WHERE conversation_id = ?
                 ORDER BY rowid
                 """,
@@ -89,7 +89,7 @@ class LCMDatabase:
     def conversation_counts(self) -> dict[str, int]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT conversation_id, COUNT(*) AS count FROM messages WHERE conversation_id IS NOT NULL GROUP BY conversation_id"
+                "SELECT conversation_id, COUNT(*) AS count FROM messages NOT INDEXED WHERE conversation_id IS NOT NULL GROUP BY conversation_id"
             ).fetchall()
         return {str(row["conversation_id"]): int(row["count"]) for row in rows}
 
@@ -97,7 +97,7 @@ class LCMDatabase:
         with self._connect() as connection:
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
             foreign_keys = [dict(row) for row in connection.execute("PRAGMA foreign_key_check").fetchall()]
-            messages = int(connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+            messages = int(connection.execute("SELECT COUNT(*) FROM messages NOT INDEXED").fetchone()[0])
             fts = int(connection.execute("SELECT COUNT(*) FROM messages_fts").fetchone()[0])
         return {
             "integrity_check": integrity,

@@ -139,6 +139,41 @@ class LCMTests(unittest.TestCase):
             assert_prefix_unchanged(before, after)
             self.assertEqual(len(tool_pairs(after)), 2)
 
+    def test_logical_message_reads_force_base_table(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lcm.db"
+            self.make_db(path)
+            db = LCMDatabase(path)
+            statements: list[str] = []
+            original_connect = db._connect
+
+            def traced_connect() -> sqlite3.Connection:
+                connection = original_connect()
+                connection.set_trace_callback(statements.append)
+                return connection
+
+            db._connect = traced_connect  # type: ignore[method-assign]
+            db.total_messages()
+            db.rows("local-chatgpt:abc")
+            db.conversation_counts()
+            db.integrity()
+
+            normalized = [" ".join(statement.split()) for statement in statements]
+            self.assertTrue(any("SELECT COUNT(*) FROM messages NOT INDEXED" in sql for sql in normalized))
+            self.assertTrue(
+                any(
+                    "FROM messages NOT INDEXED WHERE conversation_id = 'local-chatgpt:abc'" in sql
+                    for sql in normalized
+                )
+            )
+            self.assertTrue(
+                any(
+                    "FROM messages NOT INDEXED WHERE conversation_id IS NOT NULL GROUP BY conversation_id"
+                    in sql
+                    for sql in normalized
+                )
+            )
+
 
 class ShellQuoteTests(unittest.TestCase):
     def test_shell_quote_handles_apostrophe(self) -> None:

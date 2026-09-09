@@ -407,3 +407,117 @@ After the reopened tool turn and finalization:
 Because the corruption/mismatch existed before the restart half of this E6 iteration, the harness correctly failed its global integrity gate even though the stable task/session assertions passed.
 
 No in-place repair has been attempted. The next QA iteration is read-only forensics against a copied snapshot of the LCM database, with the live DB preserved untouched.
+
+## 2026-09-09 — LCM secondary-index corruption forensics
+
+### Snapshot/provenance
+
+The live QA app was stopped before capture, but the Hermes gateway and GPT Action service still held the shared LCM database open. Instead of copying potentially changing DB/WAL files directly, the forensic capture used SQLite's online backup API from a `mode=ro` source connection.
+
+Forensic directory:
+
+`.codex-linux/qa/hermes-chat/20260909T180129Z-lcm-integrity-forensics-1989292e`
+
+Snapshot:
+
+`lcm-snapshot.db`
+
+SHA256:
+
+`634be7ed4155889d5c3fc273ee5455f7daed19e359038826fc798ccc2288ab10`
+
+The live database remained untouched throughout this iteration.
+
+### The apparent 8-row FTS mismatch was a counting artifact
+
+The first E6 integrity report showed 307,875 `messages` versus 307,867 FTS rows after the run. Read-only forensic scans prove that the underlying base table and FTS are actually aligned:
+
+- `messages NOT INDEXED`: **307,867** unique rows;
+- `messages_fts`: **307,867** rows;
+- `messages_fts_docsize`: **307,867** rows;
+- base-table IDs missing from FTS docsize: **0**;
+- FTS docsize IDs missing from the base table: **0**.
+
+SQLite had optimized plain `SELECT COUNT(*) FROM messages` through a corrupt covering secondary index. That index contained eight extra logical entries, so the harness incorrectly described the discrepancy as an FTS mismatch.
+
+The QA harness now forces `messages NOT INDEXED` for logical message counts, per-conversation rows, and conversation counts. `PRAGMA integrity_check` remains the independent secondary-index health signal.
+
+### Corruption localized to `messages` secondary indexes
+
+The snapshot's base `messages` table remains readable and logically intact. The four secondary indexes show corruption:
+
+- `idx_msg_conversation_session`: physical cross-link; tree root 290435 reaches page 300956, which is also a live `messages` table leaf page;
+- `idx_msg_session`: 8 duplicate rowid entries;
+- `idx_msg_source_session`: the same 8 duplicate rowid entries;
+- `idx_msg_session_ts`: 10 duplicate rowid entries plus 2 missing rowids, net +8 entries.
+
+The common duplicated row IDs are `307718` through `307725`.
+
+The previous clean E6 evidence at 2026-09-09 14:59:55 UTC had `PRAGMA integrity_check=ok`, so this corruption occurred after that checkpoint.
+
+A correlated event exists inside the corruption window: at 16:17:53 UTC `hermes-chatgpt.service` performed hard service recovery after a non-cooperative `vision_analyze` invocation; the replacement process started at 16:17:56 UTC and recovered nine sessions. `hermes-gateway.service` did not restart in that window. This is correlation only; no causal claim is made.
+
+### `REINDEX` is unsafe for this cross-linked corruption shape
+
+A disposable clone was used to test `REINDEX idx_msg_conversation_session`.
+
+Result: the rebuilt index still shared page 300956 with the table and the base table became unreadable (`database disk image is malformed`). The clone was discarded and restored from the immutable forensic snapshot.
+
+Operational consequence: **do not run `REINDEX` or `DROP INDEX` directly on the live database while an index tree physically shares pages with the table.** Freeing/rebuilding the corrupt tree can damage pages still owned by the base table.
+
+### Safe repair proof on a disposable copy
+
+A successful reconstruction was proven entirely on copied data:
+
+1. Clone the forensic snapshot.
+2. Capture the four `messages` index SQL definitions.
+3. With `PRAGMA writable_schema=ON`, remove only those four index catalog rows. This abandons the corrupt index pages without traversing or freeing them.
+4. Bump the schema version and reopen the clone.
+5. Confirm the base table and FTS still each contain 307,867 rows. `quick_check` reports only expected orphaned "never used" pages from the abandoned index trees.
+6. `VACUUM INTO` a fresh database from that schema-stripped clone. The fresh DB reports `quick_check=ok` before any indexes are recreated.
+7. Recreate the four captured index definitions normally from the intact base table.
+8. Run full integrity and logical-preservation checks.
+
+Final salvaged-copy verification:
+
+- `PRAGMA quick_check`: `ok`;
+- `PRAGMA integrity_check`: `ok`;
+- foreign-key violations: 0;
+- base `messages`: 307,867;
+- FTS rows: 307,867;
+- every recreated index: 307,867 rows / 307,867 distinct rowids / 0 duplicates / 0 missing / 0 extra;
+- base-table logical SHA256 unchanged: `5528670ccea1f4fdd3f360dd29187a71bd97d3a8dfeed1b6c96848d0921f4f24`;
+- `messages_fts_data` logical SHA256 unchanged: `c923a957e2d68f0d58870d7edd85e95de5991e5f28edb1b9ac5ce92e611d2994`;
+- `messages_fts_idx` logical SHA256 unchanged: `6ddd13221dafc1898b440b55994edca84bb78eefbb61e482782be8cf895f0440`;
+- `messages_fts_docsize` logical SHA256 unchanged: `d4e79aebfdb3c9f083eebfae334f4f0efcd9d5cd4b429b259d1168e8b13b4ec2`;
+- FTS rowid logical SHA256 unchanged: `ea74f6129f69facae07aa1dc0ec54e4d51de1767fb437f784a1884e9f3bf1c3e`.
+
+The repair proof therefore changes secondary-index structures only; all measured logical message and FTS data is preserved exactly.
+
+### Harness correction
+
+`scripts/qa/hermes-chat/lcm.py` now forces base-table reads with `NOT INDEXED` for:
+
+- `total_messages()`;
+- per-conversation `rows()`;
+- `conversation_counts()`;
+- the logical message count inside `integrity()`.
+
+A trace-based regression test verifies the actual SQL reaching SQLite contains `NOT INDEXED` on those logical reads.
+
+Validation against the two forensic DBs:
+
+- corrupt snapshot: 307,867 messages, 307,867 FTS, `fts_matches_messages=true`, while `integrity_check` still reports the real secondary-index corruption;
+- salvaged copy: 307,867 messages, 307,867 FTS, `fts_matches_messages=true`, `integrity_check=ok`.
+
+Offline QA harness after the correction: **7/7 pass**.
+
+Final checkpoint validation:
+
+- QA harness: **7/7 pass**;
+- related Node suite: **105 total / 93 pass / 12 expected skips / 0 failures**;
+- `git diff --check`: clean.
+
+### Live DB status
+
+No live LCM repair has been performed. A live repair, if chosen, requires a backup-first maintenance window with all LCM writers stopped, followed by post-repair integrity/digest checks before normal service resumes.
