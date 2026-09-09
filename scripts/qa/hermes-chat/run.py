@@ -278,6 +278,16 @@ async def _wait_for_identity_pair(
     )
 
 
+def _process_list_prompt(marker: str) -> str:
+    return (
+        f"{marker} — You must use the advertised local functions, not answer from memory. "
+        "Call hermes_tool_search with queries set to 'process management'. Then call "
+        "hermes_tool_describe for process_manage. Then call hermes_tool_call with name "
+        "process_manage and arguments set to the JSON object string {\"action\":\"list\"}. "
+        "After those local function calls complete, report exactly what hermes_tool_call returned."
+    )
+
+
 async def _e6_create_phase(
     run: EvidenceRun,
     config: app.QAAppConfig,
@@ -286,13 +296,7 @@ async def _e6_create_phase(
     marker_one: str,
 ) -> tuple[str, str]:
     target = wait_for_shell_target(config.host, config.port)
-    prompt_one = (
-        f"{marker_one} — You must use the advertised local functions, not answer from memory. "
-        "Call hermes_tool_search with queries set to 'process management'. Then call "
-        "hermes_tool_describe for process_manage. Then call hermes_tool_call with name "
-        "process_manage and arguments set to the JSON object string {\"action\":\"list\"}. "
-        "After those local function calls complete, report exactly what hermes_tool_call returned."
-    )
+    prompt_one = _process_list_prompt(marker_one)
     async with CDPClient(target, host=config.host, port=config.port) as client:
         await chat.new_chat(client, timeout=45)
         turn_one = await chat.send_and_wait(client, prompt_one, complete_timeout=300)
@@ -318,13 +322,7 @@ async def _e6_reopen_phase(
     marker_three: str,
 ) -> None:
     target = wait_for_shell_target(config.host, config.port)
-    prompt_three = (
-        f"{marker_three} — You must use the advertised local functions, not answer from memory. "
-        "Call hermes_tool_search with queries set to 'process management'. Then call "
-        "hermes_tool_describe for process_manage. Then call hermes_tool_call with name "
-        "process_manage and arguments set to the JSON object string {\"action\":\"list\"}. "
-        "After those local function calls complete, report exactly what hermes_tool_call returned."
-    )
+    prompt_three = _process_list_prompt(marker_three)
     async with CDPClient(target, host=config.host, port=config.port) as client:
         row = await recents.open_by_server_id(
             client,
@@ -376,6 +374,148 @@ def _wait_for_tool_pairs(
         rows = lcm.rows(conversation_id)
         pairs = tool_pairs(rows)
     return rows, pairs
+
+
+async def _e5_turns(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    lifecycle: LifecycleLog,
+    baseline,
+    marker_one: str,
+    marker_two: str,
+) -> tuple[str, str]:
+    target = wait_for_shell_target(config.host, config.port)
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        await chat.new_chat(client, timeout=45)
+        turn_one = await chat.send_and_wait(
+            client,
+            _process_list_prompt(marker_one),
+            complete_timeout=300,
+        )
+        if not turn_one.accepted or not turn_one.completed:
+            raise AssertionError(f"E5 turn 1 did not complete: {turn_one}")
+        run.record("e5_turn_one", marker=marker_one, seconds=turn_one.seconds, after=turn_one.after)
+
+        client_id, server_id, _events = await _wait_for_identity_pair(lifecycle, baseline)
+
+        turn_two = await chat.send_and_wait(
+            client,
+            _process_list_prompt(marker_two),
+            complete_timeout=300,
+        )
+        if not turn_two.accepted or not turn_two.completed:
+            raise AssertionError(f"E5 turn 2 did not complete: {turn_two}")
+        run.record("e5_turn_two", marker=marker_two, seconds=turn_two.seconds, after=turn_two.after)
+    return client_id, server_id
+
+
+def command_e5(args: argparse.Namespace) -> int:
+    config = app.QAAppConfig()
+    lifecycle = LifecycleLog()
+    lcm = LCMDatabase()
+    run = EvidenceRun("e5-same-process-reuse")
+    suffix = uuid.uuid4().hex[:10]
+    marker_one = f"E5-{suffix}-TURN1"
+    marker_two = f"E5-{suffix}-TURN2"
+    lifecycle_baseline = lifecycle.baseline()
+    lcm_total_before = lcm.total_messages()
+
+    try:
+        app.start(config)
+        run.record("e5_app_started", service=app.service_snapshot(config))
+        client_id, server_id = asyncio.run(
+            _e5_turns(
+                run,
+                config,
+                lifecycle,
+                lifecycle_baseline,
+                marker_one,
+                marker_two,
+            )
+        )
+
+        events = lifecycle.events_since(lifecycle_baseline)
+        run.write_json("e5-lifecycle.json", events)
+        conversation_events = [event for event in events if event.get("conversation_id") == client_id]
+        opens = session_open_events(conversation_events)
+        session_ids = sorted(
+            {
+                str(event.get("session_id"))
+                for event in conversation_events
+                if event.get("session_id")
+            }
+        )
+        if len(opens) != 1:
+            raise AssertionError(f"expected exactly one E5 session_open, found {len(opens)}: {opens}")
+        if len(session_ids) != 1:
+            raise AssertionError(f"E5 rotated lifecycle session inside one process: {session_ids}")
+        session_id = session_ids[0]
+        expected_task_id = f"chatgpt-codex:{client_id}"
+        task_ids = sorted(
+            {
+                str(event.get("task_id"))
+                for event in conversation_events
+                if event.get("task_id")
+            }
+        )
+        if task_ids != [expected_task_id]:
+            raise AssertionError(f"E5 task identity mismatch: expected {expected_task_id}, got {task_ids}")
+        successful_tools = [event for event in conversation_events if event.get("event") == "tool_call"]
+        if len(successful_tools) != 6:
+            raise AssertionError(f"expected six successful Hermes meta-tool calls across E5, found {len(successful_tools)}")
+        run.record(
+            "e5_identity",
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+            session_id=session_id,
+            task_id=expected_task_id,
+            successful_tool_calls=len(successful_tools),
+        )
+
+        app.stop(config)
+        rows, pairs = _wait_for_tool_pairs(lcm, client_id, minimum=6)
+        server_rows = lcm.rows(server_id)
+        if len(rows) != 12 or len(pairs) != 6:
+            raise AssertionError(
+                f"expected 12 finalized rows / 6 tool pairs after E5, got {len(rows)} / {len(pairs)}"
+            )
+        if server_rows:
+            raise AssertionError(f"E5 wrote {len(server_rows)} rows under bare server UUID {server_id}")
+        row_sessions = sorted({row.session_id for row in rows if row.session_id})
+        if row_sessions != [session_id]:
+            raise AssertionError(f"E5 finalized rows span unexpected lifecycle sessions: {row_sessions}")
+        integrity = lcm.integrity()
+        if integrity.get("integrity_check") != "ok" or integrity.get("foreign_key_violations"):
+            raise AssertionError(f"LCM integrity failure after E5: {integrity}")
+        if not integrity.get("fts_matches_messages"):
+            raise AssertionError(f"LCM FTS/message mismatch after E5: {integrity}")
+        run.write_json("e5-rows.json", [row.__dict__ for row in rows])
+        run.record(
+            "e5_postconditions",
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+            session_id=session_id,
+            task_id=expected_task_id,
+            rows=len(rows),
+            tool_pairs=len(pairs),
+            server_key_rows=len(server_rows),
+            lcm_total_delta=lcm.total_messages() - lcm_total_before,
+            integrity=integrity,
+        )
+    except Exception as exc:
+        try:
+            if not app.unit_is_active(config):
+                app.start(config)
+        except Exception:
+            pass
+        run.finish("FAIL", error=f"{type(exc).__name__}: {exc}")
+        print(json.dumps({"verdict": "FAIL", "run": str(run.directory), "error": str(exc)}, indent=2))
+        return 1
+
+    app.start(config)
+    run.finish("PASS")
+    print(json.dumps({"verdict": "PASS", "run": str(run.directory)}, indent=2))
+    return 0
 
 
 def command_e6(args: argparse.Namespace) -> int:
@@ -564,6 +704,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sanity_parser = subparsers.add_parser("sanity", help="run E0 CDP + Computer Use harness sanity")
     sanity_parser.set_defaults(func=command_sanity)
+
+    e5_parser = subparsers.add_parser("e5", help="run E5 same-process conversation/session reuse")
+    e5_parser.set_defaults(func=command_e5)
 
     e6_parser = subparsers.add_parser("e6", help="run E6 restart/reopen conversation continuity")
     e6_parser.set_defaults(func=command_e6)
