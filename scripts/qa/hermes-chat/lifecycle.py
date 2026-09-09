@@ -90,8 +90,10 @@ def conversation_identity_events(events: Iterable[dict[str, Any]]) -> list[dict[
 def identity_pairs(events: Iterable[dict[str, Any]]) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    for event in conversation_identity_events(events):
-        client_id = event.get("client_conversation_id")
+    for event in events:
+        if event.get("event") not in {"conversation_identity_observed", "session_open"}:
+            continue
+        client_id = event.get("client_conversation_id") or event.get("conversation_id")
         server_id = event.get("server_conversation_id")
         if not isinstance(client_id, str) or not client_id.startswith("local-chatgpt:"):
             continue

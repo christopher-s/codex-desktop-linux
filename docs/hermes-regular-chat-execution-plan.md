@@ -306,11 +306,11 @@ Status: **COMPLETE**
 
 ### Phase B — close D10 and identity separation
 
-Status: **NOT STARTED**
+Status: **IN PROGRESS**
 
-- [ ] Live-run E6 against the current `_ensure_tool_session` alias-resolution fix.
-- [ ] Persist evidence in the QA log and this plan.
-- [ ] Introduce stable logical workspace/task identity independent of `hs_codex_*` session ID.
+- [x] Live-run the E6/D10 alias-continuity path against the current `_ensure_tool_session` alias-resolution fix. **PASS:** `20260909T145606Z-e6-restart-reopen-dc243350`; 6→8 canonical rows, 3→4 tool pairs, zero server-key rows, immutable prefix preserved, new lifecycle session after restart. This closes the D10 key-split defect. Full E6 acceptance is re-run after stable `task_id` separation because that criterion is intentionally not satisfied by the current implementation.
+- [x] Persist D10 evidence in the QA log and this plan.
+- [ ] Introduce stable logical workspace/task identity independent of `hs_codex_*` session ID. **NEXT.**
 - [ ] Replace all lifecycle-helper `task_id = f"chatgpt-codex:{session_id}"` derivations with the stable workspace/task identity.
 - [ ] Unit-test restart/session-rotation behavior.
 - [ ] Re-run E5/E6.
@@ -445,9 +445,9 @@ Current Path-A host creation is lazy on first local `tool_call`. Historical T5 t
 
 `lifecycle_helper.py` still derives Hermes `task_id` from the rotating lifecycle `session_id` in multiple paths. This can rotate process/CWD/browser/tool workspace state across app restart. Phase B must separate these lifetimes.
 
-### R3 — D10 reopen key split requires live re-verification
+### R3 — D10 reopen key split — CLOSED 2026-09-09
 
-The current dirty source includes reverse alias resolution in `_ensure_tool_session`, but the latest live QA log records the pre-fix key split. E6 is required before declaring D10 closed.
+The `_ensure_tool_session` reverse-alias fix is now live-proven across an actual Electron restart. Reusable E6 run `20260909T145606Z-e6-restart-reopen-dc243350` finalized 6 rows / 3 tool pairs before restart, reopened the exact server conversation through the real virtualized Recents UI, executed another Hermes tool turn under a new lifecycle session, then finalized 8 rows / 4 tool pairs under the original local canonical key. The original prefix remained byte-identical, zero rows appeared under the bare server UUID, and SQLite integrity/FK/FTS checks remained clean. Stable operational `task_id` remains a separate Phase B requirement.
 
 ### R4 — local-function implementation is still QA-only
 
@@ -484,3 +484,11 @@ The cache contains proven mechanics plus accumulated historical assumptions and 
 - E0 **PASS**: `20260909T045330Z-e0-sanity-463aeb85`; geometry deltas all < 2 px, no Chat turn sent, lifecycle delta 0, LCM delta 0, integrity/FK/FTS checks clean.
 - Code/KISS review removed experiment-only `set_value` QA residue and retained one CDP client plus one Computer Use MCP client.
 - Dedicated live evidence log created at `docs/hermes-regular-chat-qa-log.md`.
+
+### 2026-09-09 — D10 alias-continuity closure
+
+- Rebuilt `/home/chris/.cache/codex-merge-app` from the valid cached 26.901.51231 package with the current lifecycle/probe feature sources and verified the staged helper contains the `_ensure_tool_session()` reverse-alias payload fix.
+- Hardened the reusable E6 driver around current upstream behavior: semantic `[data-turn-key]` transcript extraction, absolute CDP RPC deadlines, current Chat/New-chat ARIA state, Work upsell dismissal, lifecycle identity extraction from `session_open`, finalization-aware LCM snapshots, delayed shell/Recents hydration, and offscreen virtualized-row scrolling before native click.
+- D10 supplemental proof **PASS:** `20260909T145304Z-d10-postrestart-proof-7b7c8036`; original 6 rows remained byte-identical, 2 new rows appended under the original local key, zero server-key rows, reopened server UUID resolved to the original local key under new lifecycle session `hs_codex_5e5774940d224f1da79e835528dc979b`.
+- Reusable E6 command **PASS:** `20260909T145606Z-e6-restart-reopen-dc243350`; local key `local-chatgpt:8145ca8f-1403-495f-bfe6-716535e32e98`, server UUID `6aa17388-c118-83e8-859c-af99320dd4bd`, 6→8 rows, 3→4 tool pairs, zero server-key rows, new lifecycle session `hs_codex_5027bfde8f1a45dc9348904942cfb6fc`, DB integrity/FK/FTS clean.
+- D10 key-split defect is closed. Full E6 remains scheduled after stable operational `task_id` is separated from lifecycle `session_id`, because the current helper still derives `task_id` from the rotating lifecycle session.

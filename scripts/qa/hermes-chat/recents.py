@@ -179,8 +179,23 @@ async def open_by_server_id(
             last_seen = [str(row.get("conversationId")) for row in rows[-20:]]
             target = next((row for row in rows if row.get("conversationId") == server_conversation_id), None)
             if target:
+                viewport_height = float(await client.evaluate("window.innerHeight"))
+                target_y = float(target["y"])
+                if target_y < 100 or target_y > viewport_height - 80:
+                    scroller = await scroller_state(client)
+                    if scroller:
+                        current_top = float(scroller.get("scrollTop", 0))
+                        await set_scroll_top(client, current_top + target_y - viewport_height / 2)
+                        await asyncio.sleep(0.35)
+                        rows = await rendered_rows(client)
+                        target = next(
+                            (row for row in rows if row.get("conversationId") == server_conversation_id),
+                            None,
+                        )
+                if not target:
+                    break
                 await client.click(float(target["x"]), float(target["y"]))
-                marker_deadline = min(deadline, time.monotonic() + 20.0)
+                marker_deadline = min(deadline, time.monotonic() + 30.0)
                 while time.monotonic() < marker_deadline:
                     if await visible_text_present(client, transcript_marker):
                         return target

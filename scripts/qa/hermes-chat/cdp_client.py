@@ -96,9 +96,13 @@ class CDPClient:
         request_id = self._next_id
         self._next_id += 1
         await self._socket.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+        deadline = asyncio.get_running_loop().time() + timeout
         while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise CDPError(f"CDP {method} timed out")
             try:
-                message = json.loads(await asyncio.wait_for(self._socket.recv(), timeout=timeout))
+                message = json.loads(await asyncio.wait_for(self._socket.recv(), timeout=remaining))
             except TimeoutError as exc:
                 raise CDPError(f"CDP {method} timed out") from exc
             if message.get("id") != request_id:

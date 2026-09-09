@@ -112,6 +112,21 @@ Observed:
 - foreign-key violations: none;
 - messages count = FTS count: 307,463.
 
+### 2026-09-09 — 26.901.51231 D10 staging refresh
+
+Before Phase B continuity testing, `/home/chris/.cache/codex-merge-app` was refreshed from the known-good 26.901.51231 live candidate and overlaid with only the current repo lifecycle helper containing the D10 alias fix.
+
+Provenance:
+
+- staged ASAR SHA-256: `cf7b9fdf19b7e935eef21f0fd3694a549875f66d8e5693d577e1d74c22e07b78`;
+- staged helper SHA-256: `a6acf463573a7fee10251f39cb8db2573c50aa23c0edf1b8b47f794376c6de7a`;
+- source helper SHA-256: same `a6acf463...`;
+- the preserved original 26.901.51231 upstream `.deb` remains corrupt, so this QA refresh deliberately did not invoke the official-package rebuild path against an untrusted archive.
+
+The first E0 run on this refreshed candidate found two AT-SPI `ChatGPT` frames containing the composer center. The original harness assumed exactly one containing frame. The corrected harness scores containing frames by the CDP-vs-AT-SPI geometry residual and accepts only the best match when its maximum x/y/width/height delta is <= 3 px.
+
+Re-run: `20260909T050938Z-e0-sanity-fff91c98` — **PASS**.
+
 ### Review checkpoint
 
 Code/KISS review after E0:
@@ -121,3 +136,192 @@ Code/KISS review after E0:
 - kept Computer Use pointer results as observed diagnostics rather than trusting backend `ok:true` as end-to-end proof;
 - moved durable GNOME/session behavior into this QA log and harness README;
 - no Hermes product code changed during E0 bring-up.
+
+## 2026-09-09 — E6 / D10 restart-reopen alias continuity
+
+### Scope
+
+Prove the dirty `_ensure_tool_session()` reverse-alias fix end to end through the real staged Electron app:
+
+1. create one ordinary Chat tool conversation;
+2. capture the temporary `local-chatgpt:*` identity and assigned server UUID dynamically;
+3. cleanly stop/finalize the app;
+4. restart the staged app under a new Electron/lifecycle epoch;
+5. reopen the exact server conversation through the real desktop UI;
+6. execute another Hermes local tool turn;
+7. finalize again;
+8. prove append-only LCM continuity under the original local canonical key and zero writes under the bare server UUID.
+
+The D10 key-split criterion is intentionally separated from the still-open stable operational `task_id` criterion. Full E6 is re-run after `task_id` is decoupled from rotating lifecycle `session_id`.
+
+### Candidate/source verification
+
+Before live D10 execution:
+
+- `/home/chris/.cache/codex-merge-app` was rebuilt from the valid cached 26.901.51231 package with the current `hermes-chat-lifecycle` and `local-function-probe` feature sources;
+- staged `lifecycle_helper.py` was inspected directly;
+- staged `_ensure_tool_session()` calls `_session({"conversation_id": conversation_id})`, allowing a server-only reopen event to reverse-resolve through the persisted alias map;
+- related offline harness tests remained green throughout the E6 hardening work.
+
+### Harness defects found while bringing E6 up
+
+#### QH-006 — current New Chat control uses semantic/ARIA surface
+
+The old driver matched only exact visible text `New chat` / `New conversation`. Current 26.901.51231 can expose the control through `aria-label`/title, and unnecessarily clicking Chat/New Chat while already on a blank Chat can remount the composer.
+
+Resolution:
+
+- generic visible-control matching now checks semantic text, `aria-label`, and title;
+- regular Chat mode selection is idempotent via `aria-pressed` / `aria-selected`;
+- an already-blank regular Chat is accepted without another navigation click;
+- when the current conversation has no composer, `new_chat()` performs active recovery instead of waiting for a composer that cannot mount in that state.
+
+#### QH-007 — CDP RPC timeout reset by unsolicited events
+
+The CDP client previously applied the full timeout to every `recv()` call. A busy page emitting unsolicited DevTools events could therefore extend a nominal 30-second request indefinitely.
+
+Resolution:
+
+- every RPC now computes one absolute deadline;
+- ignored event traffic consumes the remaining budget rather than resetting it.
+
+#### QH-008 — `document.body.innerText` omits current virtualized turn text
+
+A completed Hermes tool turn was visible in the UI and present in the DOM, but `document.body.innerText` did not include its user/assistant text because current upstream renders the transcript through a virtualized/content-visibility container.
+
+Durable upstream semantic anchors observed:
+
+- `[data-turn-key]` on each conversation turn;
+- `[data-content-search-turn-key]` on the content-search wrapper;
+- `data-user-message-bubble="true"` on the user bubble.
+
+Resolution:
+
+- transcript counts/tail use visible `[data-turn-key]` content;
+- visible dialog text is included for floating Chat panels;
+- shell chrome continues to use `document.body` independently.
+
+This restored deterministic `you` / `said` completion counts and exact transcript-tail assertions.
+
+#### QH-009 — Work upsell can block completion after send acceptance
+
+After Chat accepts the user turn, upstream may display `Continue in ChatGPT Work / Stay in Chat`. The original harness dismissed this only while waiting for send acceptance. Once the user marker rendered, completion polling could remain blocked by the upsell.
+
+Resolution:
+
+- `Stay in Chat` dismissal is attempted during completion polling as well as send acceptance;
+- the harness never treats the upsell itself as model/tool completion.
+
+#### QH-010 — LCM tool history flushes at helper finalization
+
+A successful pre-restart tool loop reported `history_messages=6` in lifecycle evidence while direct SQLite reads still showed zero rows for that conversation. A clean app stop immediately finalized the helper and atomically exposed all six rows.
+
+Resolution:
+
+- E6 performs clean stop/finalization before taking its pre-restart immutable-prefix snapshot;
+- `_wait_for_tool_pairs()` polls finalized LCM state instead of racing the helper's in-memory context;
+- the same finalization-aware check is used after the reopened tool turn.
+
+This is a product lifecycle/storage behavior, not a data-loss defect.
+
+#### QH-011 — server-ID Recents row can be hydrated offscreen
+
+After restart, the exact server conversation existed in the virtualized Recents data and React props but its rendered row center was below the viewport (observed around `y≈956`). The old helper sent a native click to that offscreen coordinate, so navigation appeared to fail even though the correct row was already hydrated.
+
+Resolution:
+
+- the helper discovers rows by exact React/server conversation UUID;
+- if the target row is outside the usable viewport, it scrolls the sidebar scroller to center that row;
+- rows/coordinates are recomputed after scrolling;
+- only then is the native CDP pointer click sent;
+- rendered transcript identity is verified after the click.
+
+A direct proof after the fix moved the target row to `y=345`, native-clicked it, rendered the original E6 user/assistant turn, and exposed the real `Message ChatGPT` composer.
+
+#### QH-012 — Search/Recents indexing can lag immediately after restart
+
+The native Search command menu can expose exact server UUID identity via `data-value="command-menu-async-result:chatgpt:<uuid>"`, but newly created conversations are not always searchable immediately after restart. Recents likewise needs interaction/hydration time before the newest row appears.
+
+Resolution:
+
+- Search support remains available as a secondary QA primitive;
+- D10's critical path uses the real Recents row because exact server UUID identity is available there once hydrated;
+- Search/Recents indexing latency is not classified as a Hermes lifecycle defect.
+
+### Supplemental product proof
+
+Run: `20260909T145304Z-d10-postrestart-proof-7b7c8036`
+
+Result: **PASS**
+
+Conversation:
+
+- canonical local key: `local-chatgpt:dba01de6-a69e-4240-849c-c831e2ae5760`;
+- server UUID: `6aa16ee6-ded4-83e8-9f2e-8a58944fcf7d`.
+
+Observed:
+
+- before restart/finalization: 6 canonical rows / 3 tool pairs;
+- server-key rows before reopen: 0;
+- original restarted conversation rendered through the real desktop UI;
+- Computer Use full-screen screenshot captured the reopened state;
+- post-restart `process_manage` tool turn completed with assistant result `{"processes":[]}`;
+- reopened lifecycle session: `hs_codex_5e5774940d224f1da79e835528dc979b`;
+- reopened `session_open` reported the original local canonical key together with the exact server UUID;
+- after finalization: 8 canonical rows / 4 tool pairs;
+- original six-row prefix remained byte-identical;
+- server-key rows after reopen: 0;
+- `PRAGMA integrity_check`: `ok`;
+- foreign-key violations: none;
+- messages count = FTS count.
+
+This is the first decisive live closure of the historical D10 split-key failure.
+
+### Reusable E6 proof
+
+Run: `20260909T145606Z-e6-restart-reopen-dc243350`
+
+Result: **PASS**
+
+Dynamic identities:
+
+- local canonical key: `local-chatgpt:8145ca8f-1403-495f-bfe6-716535e32e98`;
+- server UUID: `6aa17388-c118-83e8-859c-af99320dd4bd`;
+- reopened lifecycle session: `hs_codex_5027bfde8f1a45dc9348904942cfb6fc`.
+
+Observed:
+
+- first regular-Chat tool turn completed through `tool_search -> tool_describe -> tool_call`;
+- clean stop/finalization produced 6 canonical rows / 3 tool pairs;
+- bare server UUID had 0 rows;
+- staged app restarted under a new Electron process;
+- exact server-ID Recents row was found through React identity, scrolled into view, and native-clicked;
+- original user/assistant turn rendered after reopen;
+- Computer Use screenshot evidence was captured from the restarted app;
+- second regular-Chat tool turn completed after restart with assistant result `{"processes":[]}`;
+- finalization produced 8 canonical rows / 4 tool pairs;
+- only 2 new rows appended;
+- original six-row prefix remained byte-identical;
+- bare server UUID still had 0 rows;
+- reopened lifecycle session differs from the pre-restart epoch as expected;
+- SQLite integrity/FK/FTS checks remained clean.
+
+### D10 conclusion
+
+**D10 alias/canonical-key continuity is CLOSED.**
+
+The `_ensure_tool_session()` server-only reopen fix works in the real staged app across process restart. Server UUID assignment and reopen no longer split one logical conversation into separate LCM keys.
+
+The remaining Phase B identity defect is separate: Hermes operational `task_id` is still derived from rotating lifecycle `session_id`, so process/CWD/browser/tool workspace identity can still rotate across lifecycle epochs even though LCM conversation identity is now stable.
+
+### D10 code/KISS/architecture review checkpoint
+
+- E6 was reduced to the minimum restart proof: one tool turn before restart and one tool turn after reopen. Consecutive multi-turn behavior remains E5's responsibility.
+- Reopen identity is validated by the exact server conversation UUID before native navigation and by rendered transcript after navigation.
+- Recents virtualization is handled in one reusable helper rather than scenario-local scrolling code.
+- CDP transcript extraction uses upstream semantic `data-*` attributes rather than minified CSS identifiers.
+- Finalization-aware LCM polling reflects the helper's real persistence boundary rather than adding forced DB flush hooks for tests.
+- Supplemental one-off proof data remains under `.codex-linux/qa/hermes-chat/`; reusable behavior lives in `scripts/qa/hermes-chat/`.
+- The exploratory Search reopen helper was removed from reusable code during KISS review because the passing E6 path uses the exact server-ID Recents row and Search indexing was demonstrably timing-sensitive; the Search findings remain documented here.
+- Final checkpoint validation: harness **6/6 pass**; related Node suite **104 total / 92 pass / 12 expected skips / 0 failures**; `git diff --check` clean.
+- No additional product lifecycle behavior was changed while closing D10; the only product-side dependency is the pre-existing dirty `_ensure_tool_session()` alias fix under test.

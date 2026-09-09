@@ -20,8 +20,9 @@ from cdp_client import CDPClient, wait_for_shell_target
 import chat
 from computer_use import ComputerUseClient, ComputerUseError
 from evidence import EvidenceRun
-from lcm import LCMDatabase
-from lifecycle import LifecycleLog
+from lcm import LCMDatabase, assert_prefix_unchanged, tool_pairs
+from lifecycle import LifecycleLog, by_session, identity_pairs, session_open_events
+import recents
 
 
 async def current_shell_state(config: app.QAAppConfig) -> dict[str, object]:
@@ -153,29 +154,41 @@ async def _sanity_async(run: EvidenceRun, config: app.QAAppConfig) -> None:
                 bottom = top + float(bounds.get("height", 0))
                 if left <= cx <= right and top <= cy <= bottom:
                     containing_frames.append(frame)
-            if len(containing_frames) != 1:
-                raise AssertionError(
-                    f"expected exactly one accessible frame containing composer center, found {len(containing_frames)}"
-                )
-            frame = containing_frames[0]
-            frame_bounds = frame["bounds"]
+            if not containing_frames:
+                raise AssertionError("no accessible frame contains the composer center")
             dom_rect = blur_result.get("rect")
             if not isinstance(dom_rect, dict):
                 raise AssertionError(f"CDP composer has no DOM rect: {blur_result}")
-            expected = {
-                "x": float(frame_bounds.get("x", 0)) + float(dom_rect.get("x", 0)),
-                "y": float(frame_bounds.get("y", 0)) + float(dom_rect.get("y", 0)),
-                "width": float(dom_rect.get("width", 0)),
-                "height": float(dom_rect.get("height", 0)),
-            }
-            deltas = {
-                key: abs(float(composer_bounds.get(key, 0)) - expected[key])
-                for key in ("x", "y", "width", "height")
-            }
-            if max(deltas.values()) > 3.0:
+
+            frame_candidates: list[tuple[float, dict[str, object], dict[str, float], dict[str, float]]] = []
+            for candidate in containing_frames:
+                candidate_bounds = candidate["bounds"]
+                expected = {
+                    "x": float(candidate_bounds.get("x", 0)) + float(dom_rect.get("x", 0)),
+                    "y": float(candidate_bounds.get("y", 0)) + float(dom_rect.get("y", 0)),
+                    "width": float(dom_rect.get("width", 0)),
+                    "height": float(dom_rect.get("height", 0)),
+                }
+                deltas = {
+                    key: abs(float(composer_bounds.get(key, 0)) - expected[key])
+                    for key in ("x", "y", "width", "height")
+                }
+                frame_candidates.append((max(deltas.values()), candidate, expected, deltas))
+            frame_candidates.sort(key=lambda item: item[0])
+            score, frame, expected, deltas = frame_candidates[0]
+            if score > 3.0:
+                scored = [
+                    {
+                        "index": candidate.get("index"),
+                        "bounds": candidate.get("bounds"),
+                        "score": candidate_score,
+                        "deltas": candidate_deltas,
+                    }
+                    for candidate_score, candidate, _candidate_expected, candidate_deltas in frame_candidates
+                ]
                 raise AssertionError(
-                    f"Computer Use/CDP composer geometry mismatch: expected={expected}, "
-                    f"accessible={composer_bounds}, deltas={deltas}"
+                    f"Computer Use/CDP composer geometry mismatch: accessible={composer_bounds}, "
+                    f"candidates={scored}"
                 )
             focus_result = computer.click_accessible(element_index=int(composer_node["index"]))
             run.record(
@@ -245,6 +258,242 @@ def command_sanity(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _wait_for_identity_pair(
+    lifecycle: LifecycleLog,
+    baseline,
+    *,
+    timeout: float = 45.0,
+) -> tuple[str, str, list[dict[str, object]]]:
+    deadline = time.monotonic() + timeout
+    latest_events: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        latest_events = lifecycle.events_since(baseline)
+        pairs = identity_pairs(latest_events)
+        if pairs:
+            client_id, server_id = pairs[-1]
+            return client_id, server_id, latest_events
+        await asyncio.sleep(1.0)
+    raise AssertionError(
+        f"no fresh client/server conversation identity pair observed within {timeout:.0f}s"
+    )
+
+
+async def _e6_create_phase(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    lifecycle: LifecycleLog,
+    baseline,
+    marker_one: str,
+) -> tuple[str, str]:
+    target = wait_for_shell_target(config.host, config.port)
+    prompt_one = (
+        f"{marker_one} — Use tool_call to execute the process_manage tool with action set to list, "
+        "then report exactly what it returned."
+    )
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        await chat.new_chat(client, timeout=45)
+        turn_one = await chat.send_and_wait(client, prompt_one, complete_timeout=300)
+        if not turn_one.accepted or not turn_one.completed:
+            raise AssertionError(f"E6 create turn 1 did not complete: {turn_one}")
+        run.record("e6_create_turn_one", marker=marker_one, seconds=turn_one.seconds, after=turn_one.after)
+
+    client_id, server_id, events = await _wait_for_identity_pair(lifecycle, baseline)
+    run.write_json("e6-create-lifecycle.json", events)
+    run.record(
+        "e6_identity_pair",
+        client_conversation_id=client_id,
+        server_conversation_id=server_id,
+    )
+    return client_id, server_id
+
+
+async def _e6_reopen_phase(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    server_id: str,
+    marker_one: str,
+    marker_three: str,
+) -> None:
+    target = wait_for_shell_target(config.host, config.port)
+    prompt_three = (
+        f"{marker_three} — Use tool_call to execute the process_manage tool with action set to list, "
+        "then report exactly what it returned."
+    )
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        row = await recents.open_by_server_id(
+            client,
+            server_id,
+            transcript_marker=marker_one,
+            timeout=180,
+        )
+        run.record("e6_reopened_by_server_id", server_conversation_id=server_id, row=row)
+
+        # Independent visual evidence for the reopened real UI. Whole-screen
+        # capture is used when current-session GNOME window enumeration is unavailable.
+        screenshot_path = run.directory / "e6-reopened.png"
+        with ComputerUseClient() as computer:
+            try:
+                window = computer.find_chatgpt_window()
+            except ComputerUseError:
+                window = None
+            screenshot = (
+                computer.screenshot_window(screenshot_path, window)
+                if window is not None
+                else computer.screenshot_full_screen(screenshot_path)
+            )
+            run.record(
+                "e6_reopen_computer_use_screenshot",
+                path=str(screenshot.path.relative_to(run.directory)),
+                mime_type=screenshot.mime_type,
+                bytes=screenshot.path.stat().st_size,
+                structured=screenshot.structured,
+            )
+
+        turn_three = await chat.send_and_wait(client, prompt_three, complete_timeout=300)
+        if not turn_three.accepted or not turn_three.completed:
+            raise AssertionError(f"E6 reopened turn did not complete: {turn_three}")
+        run.record("e6_reopen_turn_three", marker=marker_three, seconds=turn_three.seconds, after=turn_three.after)
+
+
+def _wait_for_tool_pairs(
+    lcm: LCMDatabase,
+    conversation_id: str,
+    *,
+    minimum: int = 1,
+    timeout: float = 20.0,
+) -> tuple[list, list]:
+    deadline = time.monotonic() + timeout
+    rows = lcm.rows(conversation_id)
+    pairs = tool_pairs(rows)
+    while len(pairs) < minimum and time.monotonic() < deadline:
+        time.sleep(0.25)
+        rows = lcm.rows(conversation_id)
+        pairs = tool_pairs(rows)
+    return rows, pairs
+
+
+def command_e6(args: argparse.Namespace) -> int:
+    config = app.QAAppConfig()
+    lifecycle = LifecycleLog()
+    lcm = LCMDatabase()
+    run = EvidenceRun("e6-restart-reopen")
+    marker_suffix = uuid.uuid4().hex[:10]
+    marker_one = f"E6-{marker_suffix}-TURN1"
+    marker_three = f"E6-{marker_suffix}-TURN2-REOPEN"
+    lifecycle_baseline = lifecycle.baseline()
+    lcm_total_before = lcm.total_messages()
+
+    try:
+        app.start(config)
+        run.record("e6_app_started_create", service=app.service_snapshot(config))
+        client_id, server_id = asyncio.run(
+            _e6_create_phase(
+                run,
+                config,
+                lifecycle,
+                lifecycle_baseline,
+                marker_one,
+            )
+        )
+
+        # A clean stop is part of the acceptance criterion and forces lifecycle/LCM flush.
+        app.stop(config)
+        run.record("e6_app_stopped", port_listening=app.port_listening(config.host, config.port))
+
+        before_restart_rows, before_pairs = _wait_for_tool_pairs(lcm, client_id, minimum=1)
+        before_server_rows = lcm.rows(server_id)
+        if len(before_pairs) < 1:
+            raise AssertionError(
+                f"expected at least one finalized tool call/result pair before restart under {client_id}; "
+                f"found {len(before_pairs)}"
+            )
+        if before_server_rows:
+            raise AssertionError(
+                f"fresh pre-restart conversation unexpectedly has rows under server key {server_id}: "
+                f"{len(before_server_rows)}"
+            )
+        run.write_json(
+            "e6-before-restart-rows.json",
+            [row.__dict__ for row in before_restart_rows],
+        )
+        run.record(
+            "e6_before_restart",
+            client_rows=len(before_restart_rows),
+            tool_pairs=len(before_pairs),
+            server_rows=len(before_server_rows),
+            integrity=lcm.integrity(),
+        )
+
+        reopen_baseline = lifecycle.baseline()
+        app.start(config)
+        run.record("e6_app_started_reopen", service=app.service_snapshot(config))
+        asyncio.run(_e6_reopen_phase(run, config, server_id, marker_one, marker_three))
+        app.stop(config)
+
+        after_rows, after_pairs = _wait_for_tool_pairs(
+            lcm,
+            client_id,
+            minimum=len(before_pairs) + 1,
+        )
+        server_rows_after = lcm.rows(server_id)
+        assert_prefix_unchanged(before_restart_rows, after_rows)
+        if len(after_rows) <= len(before_restart_rows):
+            raise AssertionError("reopened tool turn did not append rows under the canonical local key")
+        if len(after_pairs) <= len(before_pairs):
+            raise AssertionError("reopened tool turn did not append a tool call/result pair")
+        if server_rows_after:
+            raise AssertionError(
+                f"D10 split-key regression: reopened rows were written under bare server UUID {server_id}: "
+                f"{len(server_rows_after)} rows"
+            )
+
+        reopen_events = lifecycle.events_since(reopen_baseline)
+        run.write_json("e6-reopen-lifecycle.json", reopen_events)
+        opens = session_open_events(reopen_events)
+        canonical_opens = [event for event in opens if event.get("conversation_id") == client_id]
+        if not canonical_opens:
+            raise AssertionError(
+                f"no reopened session_open resolved server ID {server_id} to canonical key {client_id}; opens={opens}"
+            )
+        reopened_sessions = sorted(by_session(reopen_events))
+        run.write_json("e6-after-restart-rows.json", [row.__dict__ for row in after_rows])
+        integrity = lcm.integrity()
+        if integrity.get("integrity_check") != "ok" or integrity.get("foreign_key_violations"):
+            raise AssertionError(f"LCM integrity failure after E6: {integrity}")
+        if not integrity.get("fts_matches_messages"):
+            raise AssertionError(f"LCM FTS/message mismatch after E6: {integrity}")
+
+        run.record(
+            "e6_postconditions",
+            client_conversation_id=client_id,
+            server_conversation_id=server_id,
+            before_rows=len(before_restart_rows),
+            after_rows=len(after_rows),
+            appended_rows=len(after_rows) - len(before_restart_rows),
+            before_tool_pairs=len(before_pairs),
+            after_tool_pairs=len(after_pairs),
+            server_key_rows=len(server_rows_after),
+            reopened_sessions=reopened_sessions,
+            lcm_total_delta=lcm.total_messages() - lcm_total_before,
+            integrity=integrity,
+        )
+    except Exception as exc:
+        # Preserve evidence and leave the app usable for inspection after a failed run.
+        try:
+            if not app.unit_is_active(config):
+                app.start(config)
+        except Exception:
+            pass
+        run.finish("FAIL", error=f"{type(exc).__name__}: {exc}")
+        print(json.dumps({"verdict": "FAIL", "run": str(run.directory), "error": str(exc)}, indent=2))
+        return 1
+
+    app.start(config)
+    run.finish("PASS")
+    print(json.dumps({"verdict": "PASS", "run": str(run.directory)}, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -255,6 +504,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sanity_parser = subparsers.add_parser("sanity", help="run E0 CDP + Computer Use harness sanity")
     sanity_parser.set_defaults(func=command_sanity)
+
+    e6_parser = subparsers.add_parser("e6", help="run E6 restart/reopen conversation continuity")
+    e6_parser.set_defaults(func=command_e6)
     return parser
 
 

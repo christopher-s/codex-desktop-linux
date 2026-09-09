@@ -68,12 +68,16 @@ class LifecycleTests(unittest.TestCase):
             },
             {
                 "event": "session_open",
-                "conversation_id": "local-chatgpt:abc",
+                "conversation_id": "local-chatgpt:def",
+                "server_conversation_id": "22222222-2222-2222-2222-222222222222",
             },
         ]
         self.assertEqual(
             identity_pairs(events),
-            [("local-chatgpt:abc", "11111111-1111-1111-1111-111111111111")],
+            [
+                ("local-chatgpt:abc", "11111111-1111-1111-1111-111111111111"),
+                ("local-chatgpt:def", "22222222-2222-2222-2222-222222222222"),
+            ],
         )
 
 

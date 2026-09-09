@@ -19,6 +19,13 @@ STATE_JS = r"""
     .filter((node) => node.offsetParent !== null && node.isContentEditable);
   const composer = visible.length ? visible[visible.length - 1] : null;
   const body = document.body ? (document.body.innerText || '') : '';
+  const turns = [...document.querySelectorAll('[data-turn-key]')]
+    .filter((node) => node.offsetParent !== null)
+    .map((node) => node.innerText || node.textContent || '');
+  const dialogTranscript = [...document.querySelectorAll('[role=dialog]')]
+    .filter((node) => node.offsetParent !== null)
+    .map((node) => node.innerText || node.textContent || '');
+  const transcript = [...turns, ...dialogTranscript].join('\n');
   const stop = [...document.querySelectorAll('button')].some((button) => {
     const label = button.getAttribute('aria-label') || button.title || '';
     return /stop|cancel/i.test(label) && button.offsetParent !== null;
@@ -28,11 +35,12 @@ STATE_JS = r"""
     visibleComposerCount: visible.length,
     composerLength: composer ? (composer.textContent || '').trim().length : -1,
     composerId: composer ? (composer.id || '(no-id)') : null,
-    you: (body.match(/You said:/g) || []).length,
-    said: (body.match(/ChatGPT said:/g) || []).length,
+    you: (transcript.match(/You said:/g) || []).length,
+    said: (transcript.match(/ChatGPT said:/g) || []).length,
     stop,
     bodyLength: body.length,
-    tail: body.slice(-1200),
+    transcriptLength: transcript.length,
+    tail: transcript ? transcript.slice(-1200) : body.slice(-1200),
   };
 })()
 """
@@ -63,8 +71,52 @@ async def state(client: CDPClient) -> dict[str, Any]:
 
 
 async def visible_text_present(client: CDPClient, text: str) -> bool:
-    expression = f"(document.body.innerText || '').includes({json.dumps(text)})"
+    expression = r"""
+((want) => {
+  const body = document.body ? (document.body.innerText || '') : '';
+  const turns = [...document.querySelectorAll('[data-turn-key]')]
+    .filter((node) => node.offsetParent !== null)
+    .map((node) => node.innerText || node.textContent || '')
+    .join('\n');
+  const dialogs = [...document.querySelectorAll('[role=dialog]')]
+    .filter((node) => node.offsetParent !== null)
+    .map((node) => node.innerText || node.textContent || '')
+    .join('\n');
+  return body.includes(want) || turns.includes(want) || dialogs.includes(want);
+})(%s)
+""" % json.dumps(text)
     return bool(await client.evaluate(expression))
+
+
+async def click_visible_control(client: CDPClient, names: list[str]) -> bool:
+    expression = r"""
+((names) => {
+  const wanted = new Set(names);
+  const candidates = [...document.querySelectorAll('button,[role=button],a')]
+    .filter((node) => node.offsetParent !== null)
+    .filter((node) => {
+      const text = (node.textContent || '').trim();
+      const aria = (node.getAttribute('aria-label') || '').trim();
+      const title = (node.getAttribute('title') || '').trim();
+      return wanted.has(text) || wanted.has(aria) || wanted.has(title);
+    });
+  if (!candidates.length) return null;
+  const node = candidates[0];
+  const rect = node.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+    text: (node.textContent || '').trim(),
+    aria: node.getAttribute('aria-label'),
+  };
+})(%s)
+""" % json.dumps(names)
+    point = await client.evaluate(expression)
+    if not isinstance(point, dict):
+        return False
+    await client.click(float(point["x"]), float(point["y"]))
+    return True
 
 
 async def click_visible_text(client: CDPClient, text: str) -> bool:
@@ -159,8 +211,18 @@ async def clear_draft(client: CDPClient, timeout: float = 30.0) -> None:
 
 
 async def ensure_regular_chat(client: CDPClient) -> None:
-    # Chat is already selected in the common path. A visible exact Chat control
-    # is clicked through native CDP coordinates when present.
+    # Avoid re-clicking an already-selected mode: current upstream can remount
+    # the composer during mode navigation, creating a transient detached state.
+    selected = await client.evaluate(r"""
+(() => {
+  const button = [...document.querySelectorAll('button,[role=tab]')]
+    .find((node) => node.offsetParent !== null && (node.textContent || '').trim() === 'Chat');
+  if (!button) return null;
+  return button.getAttribute('aria-pressed') === 'true' || button.getAttribute('aria-selected') === 'true';
+})()
+""")
+    if selected is True:
+        return
     clicked = await click_visible_text(client, "Chat")
     if clicked:
         await asyncio.sleep(0.8)
@@ -168,11 +230,26 @@ async def ensure_regular_chat(client: CDPClient) -> None:
 
 async def new_chat(client: CDPClient, timeout: float = 30.0) -> dict[str, Any]:
     await ensure_regular_chat(client)
-    if not await click_visible_text(client, "New chat"):
-        if not await click_visible_text(client, "New conversation"):
-            raise CDPError("could not find a visible New chat control")
+    current = await state(client)
+    if (
+        current.get("visibleComposerCount", 0) >= 1
+        and current.get("you", 0) == 0
+        and current.get("said", 0) == 0
+        and current.get("composerLength") == 0
+    ):
+        return current
+
+    deadline = time.monotonic() + timeout
+    clicked = False
+    while time.monotonic() < deadline:
+        clicked = await click_visible_control(client, ["New chat", "New conversation"])
+        if clicked:
+            break
+        await asyncio.sleep(0.4)
+    if not clicked:
+        raise CDPError("could not find a visible New chat/New conversation control by text, aria-label, or title")
     await asyncio.sleep(1.0)
-    ready = await wait_for_visible_composer(client, timeout=timeout)
+    ready = await wait_for_visible_composer(client, timeout=max(1.0, deadline - time.monotonic()))
     if ready.get("composerLength", 0) > 0:
         await clear_draft(client)
         ready = await state(client)
@@ -219,6 +296,7 @@ async def send_and_wait(
     while time.monotonic() < deadline:
         await asyncio.sleep(poll_interval)
         last = await state(client)
+        await dismiss_stay_in_chat(client)
         if last.get("said", 0) > before.get("said", 0):
             reply_seen = True
         if reply_seen and not last.get("stop"):
