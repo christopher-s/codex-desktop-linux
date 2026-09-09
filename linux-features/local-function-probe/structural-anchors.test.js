@@ -105,28 +105,50 @@ test("patchInitial fails closed on a partial execution-handoff restoration", () 
   );
 });
 
-test("patchViewer keeps native handoffs terminal while routing sourceTool-backed local calls generically", () => {
+test("patchViewer keeps the native executor mounted and suppresses only completed local-tool handoff presentation", () => {
   const source = asset("viewer-");
   const patched = assertIdempotent(patchViewer, source);
   assert.match(patched, /codexP2ToolViewerRuntime/);
+  assert.match(patched, /codexP2ToolCompletedPresentationRuntime/);
   assert.match(
+    patched,
+    /if\(f\.tool===`handoff`\)\{globalThis\.__codexP2ViewerRouted/,
+    "handoff items still mount the native handoff component that drives local execution",
+  );
+  assert.doesNotMatch(
     patched,
     /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{globalThis\.__codexP2ViewerRouted/,
   );
+  assert.match(
+    patched,
+    /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null;\/\*codexP2ToolCompletedPresentationRuntime\*\//,
+    "published sourceTool-backed results suppress only the terminal native handoff card",
+  );
 });
 
-test("patchViewer upgrades one already-patched legacy handoff-viewer predicate and fails closed when missing", () => {
-  const legacy = [
-    "codexP2ToolViewerRuntime",
-    "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;",
-  ].join(";");
-  const upgraded = patchViewer(legacy);
-  assert.match(upgraded, /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{globalThis\.__codexP2ViewerRouted/);
-  assert.equal(patchViewer(upgraded), upgraded);
+test("patchViewer migrates the earlier top-level sourceTool bypass back to an executor-mounted post-result suppression", () => {
+  const source = asset("viewer-");
+  const current = patchViewer(source);
+  const completedPattern = /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null;\/\*codexP2ToolCompletedPresentationRuntime\*\//;
+  const previous = current
+    .replace(
+      "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted",
+      "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted",
+    )
+    .replace(completedPattern, "");
+  const migrated = patchViewer(previous);
+  assert.match(migrated, /if\(f\.tool===`handoff`\)\{globalThis\.__codexP2ViewerRouted/);
+  assert.doesNotMatch(migrated, /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{/);
+  assert.match(migrated, /codexP2ToolCompletedPresentationRuntime/);
+  assert.equal(patchViewer(migrated), migrated);
 
+  const duplicatedBypass = previous.replace(
+    "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted",
+    "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted;if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted",
+  );
   assert.throws(
-    () => patchViewer("codexP2ToolViewerRuntime;if(f.tool===`handoff`){noop()}"),
-    /upgrade local-tool viewer presentation: expected exactly one legacy handoff viewer anchor, found 0/,
+    () => patchViewer(duplicatedBypass),
+    /restore handoff viewer execution mount: expected exactly one bypassed viewer anchor, found 2/,
   );
 });
 

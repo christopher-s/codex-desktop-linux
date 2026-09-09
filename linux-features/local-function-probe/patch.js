@@ -15,6 +15,7 @@ const VIEWER_PATTERN = /^viewer-[^.]+\.js$/;
 const INITIAL_MARKER = "codexP2ToolSignatureRuntime";
 const PRIMARY_MARKER = "codexP2ToolDetectorRuntime";
 const VIEWER_MARKER = "codexP2ToolViewerRuntime";
+const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
 const RESULT_PAIR_MARKER = "codexP2ToolResultPairRuntime";
 const EXEC_MARKER = "codexP2ToolExecRuntime";
 
@@ -275,26 +276,39 @@ function acceptedActionEnumFromSource(source) {
   return match[2];
 }
 
-function upgradeLegacyViewerPresentation(source) {
-  const upgraded = "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted";
-  if (source.includes(upgraded)) return source;
-  const legacy = "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted";
-  if (!source.includes(VIEWER_MARKER)) return source;
-  const count = source.split(legacy).length - 1;
+function restoreHandoffViewerExecutionMount(source) {
+  const bypassed = "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted";
+  const mounted = "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted";
+  const count = source.split(bypassed).length - 1;
+  if (count === 0) return source;
   if (count !== 1) {
-    throw new Error(`upgrade local-tool viewer presentation: expected exactly one legacy handoff viewer anchor, found ${count}`);
+    throw new Error(`restore handoff viewer execution mount: expected exactly one bypassed viewer anchor, found ${count}`);
   }
-  return source.replace(legacy, upgraded);
+  return source.replace(bypassed, mounted);
+}
+
+function patchCompletedLocalToolPresentation(source) {
+  if (source.includes(COMPLETED_PRESENTATION_MARKER)) return source;
+  return replaceStructuralExactlyOnce(
+    source,
+    /(\{conversationId:([\w$]+),item:([\w$]+),onContinueSuccess:[\w$]+,shouldBlockExternalEgress:[\w$]+\}=([\w$]+),[\s\S]{0,2200}?)(if\(!([\w$]+)&&\(([\w$]+)\?\.type===`accepted`\|\|\7\?\.type===`partial`\)\)\{)/,
+    (_match, prefix, _conversationId, item, _props, acceptedBranch, _failedPublication, result) =>
+      `${prefix}if(${item}.sourceTool&&${result}!=null)return null;/*${COMPLETED_PRESENTATION_MARKER}*/${acceptedBranch}`,
+    "suppress terminal native handoff presentation after a local-tool result",
+  );
 }
 
 function patchViewer(source) {
-  if (source.includes(VIEWER_MARKER)) return upgradeLegacyViewerPresentation(source);
-  return replaceExactlyOnce(
-    source,
-    "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
-    `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`)globalThis.__codexP2LmItem={tool:f.tool,sourceTool:f.sourceTool,completed:f.completed};if(f.tool===\`handoff\`&&!f.sourceTool){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
-    "route local tools through generic dynamic-tool viewer while preserving native handoff execution state"
-  );
+  let out = restoreHandoffViewerExecutionMount(source);
+  if (!out.includes(VIEWER_MARKER)) {
+    out = replaceExactlyOnce(
+      out,
+      "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
+      `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`)globalThis.__codexP2LmItem={tool:f.tool,sourceTool:f.sourceTool,completed:f.completed};if(f.tool===\`handoff\`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
+      "instrument native handoff viewer while preserving executor mount",
+    );
+  }
+  return patchCompletedLocalToolPresentation(out);
 }
 
 const PHASE1_ONLY = process.env.PHASE1_ONLY || ""; // "initial" | "primary" | "viewer" | ""
