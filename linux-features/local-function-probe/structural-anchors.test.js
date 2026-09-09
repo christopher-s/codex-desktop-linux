@@ -8,7 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { patchInitial, patchPrimary } = require("./patch.js");
+const { patchInitial, patchPrimary, patchViewer } = require("./patch.js");
 
 const ASSETS = "/tmp/codex-drift-2690151231/extracted/webview/assets";
 const FALLBACK_ASAR =
@@ -16,6 +16,7 @@ const FALLBACK_ASAR =
 const FALLBACK_ASSET_PATHS = {
   "app-initial-": "webview/assets/app-initial-9e28b0395ba3.js",
   "app-primary-": "webview/assets/app-primary-bd4b894ed032.js",
+  "viewer-": "webview/assets/viewer-e9246054b1c4.js",
 };
 
 function asset(prefix) {
@@ -55,15 +56,10 @@ test("patchInitial follows 26.901.51231 structures without pinning minified iden
   assert.match(patched, /codex_local_function_result/);
   assert.match(patched, /sourceTool/);
   assert.match(patched, /local-function:/);
-  assert.doesNotMatch(
-    patched,
-    /sourceTool:r\?[\w$]+:void 0,tool:r\?`handoff`:/,
-    "advertised local functions must stay ordinary dynamic tools instead of entering the native handoff viewer",
-  );
   assert.match(
     patched,
-    /sourceTool:r\?([\w$]+):void 0,tool:\1/,
-    "advertised local functions preserve their source tool name for presentation",
+    /sourceTool:r\?[\w$]+:void 0,tool:r\?`handoff`:/,
+    "advertised local functions preserve native handoff identity for execution",
   );
   assert.match(patched, /phase:"conversation_identity"/);
   assert.match(patched, /server_conversation_id:/);
@@ -80,32 +76,57 @@ test("patchInitial follows 26.901.51231 structures without pinning minified iden
   );
 });
 
-test("patchInitial upgrades exactly two legacy local-tool handoff presentation anchors", () => {
-  const legacy = [
+test("patchInitial restores exactly two presentation-only local tools to native handoff execution identity", () => {
+  const presentationOnly = [
     "codexP2ToolSignatureRuntime",
-    "sourceTool:r?a:void 0,tool:r?`handoff`:a",
-    "sourceTool:x?b:void 0,tool:x?`handoff`:b",
+    "sourceTool:r?a:void 0,tool:a",
+    "sourceTool:x?b:void 0,tool:b",
   ].join(";");
-  const upgraded = patchInitial(legacy);
+  const restored = patchInitial(presentationOnly);
   assert.equal(
-    upgraded,
+    restored,
     [
       "codexP2ToolSignatureRuntime",
-      "sourceTool:r?a:void 0,tool:a",
-      "sourceTool:x?b:void 0,tool:b",
+      "sourceTool:r?a:void 0,tool:r?`handoff`:a",
+      "sourceTool:x?b:void 0,tool:x?`handoff`:b",
     ].join(";"),
   );
-  assert.equal(patchInitial(upgraded), upgraded);
+  assert.equal(patchInitial(restored), restored);
 });
 
-test("patchInitial fails closed on a partial legacy local-tool presentation migration", () => {
+test("patchInitial fails closed on a partial execution-handoff restoration", () => {
   const partial = [
     "codexP2ToolSignatureRuntime",
-    "sourceTool:r?a:void 0,tool:r?`handoff`:a",
+    "sourceTool:r?a:void 0,tool:a",
   ].join(";");
   assert.throws(
     () => patchInitial(partial),
-    /upgrade legacy local-tool presentation: expected exactly two anchors, found 1/,
+    /restore local-tool execution handoff: expected exactly two anchors, found 1/,
+  );
+});
+
+test("patchViewer keeps native handoffs terminal while routing sourceTool-backed local calls generically", () => {
+  const source = asset("viewer-");
+  const patched = assertIdempotent(patchViewer, source);
+  assert.match(patched, /codexP2ToolViewerRuntime/);
+  assert.match(
+    patched,
+    /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{globalThis\.__codexP2ViewerRouted/,
+  );
+});
+
+test("patchViewer upgrades one already-patched legacy handoff-viewer predicate and fails closed when missing", () => {
+  const legacy = [
+    "codexP2ToolViewerRuntime",
+    "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;",
+  ].join(";");
+  const upgraded = patchViewer(legacy);
+  assert.match(upgraded, /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{globalThis\.__codexP2ViewerRouted/);
+  assert.equal(patchViewer(upgraded), upgraded);
+
+  assert.throws(
+    () => patchViewer("codexP2ToolViewerRuntime;if(f.tool===`handoff`){noop()}"),
+    /upgrade local-tool viewer presentation: expected exactly one legacy handoff viewer anchor, found 0/,
   );
 });
 

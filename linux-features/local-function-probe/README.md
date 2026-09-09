@@ -87,7 +87,7 @@ call trio) without a catch-all shim.
   still returns `accepted:true` carrying the registry's "Unknown tool"
   error in `message` — the rejection is semantic (in the error text),
   not transport-level.
-- **Presentation-state fix (E5, 2026-09-09):** advertised local functions keep their real tool name in the normalized `dynamic-tool-call` item instead of being rewritten to `tool:"handoff"`. The call-id pair key and `sourceTool` metadata are preserved, so hidden tool results still attach and mark the item complete while the generic dynamic-tool viewer remains active. This prevents successful local tools from entering the terminal native Codex handoff UI, which detached the Chat composer after the first tool turn.
+- **Presentation-state fix (E5, 2026-09-09):** advertised local functions keep `tool:"handoff"` internally so the native executor path remains mounted, and also carry `sourceTool:<real local function>`. The viewer routes `handoff` items with no `sourceTool` into the terminal native Codex handoff component; `sourceTool`-backed local calls stay in the generic dynamic-tool presentation path. When the hidden role:`tool` result attaches, the completed item adopts `sourceTool` as its visible tool name. This preserves execution while preventing successful local tools from detaching the Chat composer after the first tool turn.
 - Multi-signature honored: `sigBuilds` > 1, each bare tool called and executed.
 - IPC dispatch confirmed live from a plain-Chat webview:
   `hermes_read_file` → `read_file`, real file content returned, `enabled:true`.

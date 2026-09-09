@@ -148,18 +148,18 @@ function replaceBalancedFunctionExactlyOnce(source, startPattern, replacement, l
   throw new Error(`${label}: unterminated structural function`);
 }
 
-function upgradeLegacyLocalToolPresentation(source) {
-  const legacy = /sourceTool:([\w$]+)\?([\w$]+):void 0,tool:\1\?`handoff`:\2/g;
-  const matches = [...source.matchAll(legacy)];
+function restoreLocalToolExecutionHandoff(source) {
+  const presentationOnly = /sourceTool:([\w$]+)\?([\w$]+):void 0,tool:\2/g;
+  const matches = [...source.matchAll(presentationOnly)];
   if (matches.length === 0) return source;
   if (matches.length !== 2) {
-    throw new Error(`upgrade legacy local-tool presentation: expected exactly two anchors, found ${matches.length}`);
+    throw new Error(`restore local-tool execution handoff: expected exactly two anchors, found ${matches.length}`);
   }
-  return source.replace(legacy, "sourceTool:$1?$2:void 0,tool:$2");
+  return source.replace(presentationOnly, "sourceTool:$1?$2:void 0,tool:$1?`handoff`:$2");
 }
 
 function patchInitial(source) {
-  if (source.includes(INITIAL_MARKER)) return upgradeLegacyLocalToolPresentation(source);
+  if (source.includes(INITIAL_MARKER)) return restoreLocalToolExecutionHandoff(source);
   let out = source;
   out = replaceStructuralExactlyOnce(
     out,
@@ -199,7 +199,7 @@ function patchInitial(source) {
   out = replaceStructuralExactlyOnce(
     out,
     /function ([\w$]+)\(([\w$]+)\)\{let ([\w$]+)=([\w$]+)\(\2\.recipient\);if\(\3\?\.startsWith\(`functions\.`\)===!0\)\{let ([\w$]+)=\3\.slice\(10\);return\{completed:!1,pairKey:`dynamic:\$\{\5\}`,tool:\5\}\}return \3\?\.startsWith\(`local\.`\)===!0\?\{completed:\2\.status!==`in_progress`,pairKey:null,tool:\3\.slice\(6\)\}:null\}/,
-    (_match, fn, message, recipient, stringNormalizer, tool) => `function ${fn}(${message}){let ${recipient}=${stringNormalizer}(${message}.recipient);if(${recipient}?.startsWith(\`functions.\`)===!0){let ${tool}=${recipient}.slice(10),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(${tool});r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1);return{completed:!1,pairKey:r?\`local-function:\${IL(${message})}\`:\`dynamic:\${${tool}}\`,sourceTool:r?${tool}:void 0,tool:${tool}}}return ${recipient}?.startsWith(\`local.\`)===!0?(()=>{let n=${recipient}.slice(6),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(n);return r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1),{completed:r?!1:${message}.status!==\`in_progress\`,pairKey:r?\`local-function:\${IL(${message})}\`:null,sourceTool:r?n:void 0,tool:n}})():null}`,
+    (_match, fn, message, recipient, stringNormalizer, tool) => `function ${fn}(${message}){let ${recipient}=${stringNormalizer}(${message}.recipient);if(${recipient}?.startsWith(\`functions.\`)===!0){let ${tool}=${recipient}.slice(10),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(${tool});r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1);return{completed:!1,pairKey:r?\`local-function:\${IL(${message})}\`:\`dynamic:\${${tool}}\`,sourceTool:r?${tool}:void 0,tool:r?\`handoff\`:${tool}}}return ${recipient}?.startsWith(\`local.\`)===!0?(()=>{let n=${recipient}.slice(6),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(n);return r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1),{completed:r?!1:${message}.status!==\`in_progress\`,pairKey:r?\`local-function:\${IL(${message})}\`:null,sourceTool:r?n:void 0,tool:r?\`handoff\`:n}})():null}`,
     "normalize advertised tool calls for native executor and pair by call id",
   );
   out = replaceStructuralExactlyOnce(
@@ -275,13 +275,25 @@ function acceptedActionEnumFromSource(source) {
   return match[2];
 }
 
+function upgradeLegacyViewerPresentation(source) {
+  const upgraded = "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted";
+  if (source.includes(upgraded)) return source;
+  const legacy = "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted";
+  if (!source.includes(VIEWER_MARKER)) return source;
+  const count = source.split(legacy).length - 1;
+  if (count !== 1) {
+    throw new Error(`upgrade local-tool viewer presentation: expected exactly one legacy handoff viewer anchor, found ${count}`);
+  }
+  return source.replace(legacy, upgraded);
+}
+
 function patchViewer(source) {
-  if (source.includes(VIEWER_MARKER)) return source;
+  if (source.includes(VIEWER_MARKER)) return upgradeLegacyViewerPresentation(source);
   return replaceExactlyOnce(
     source,
     "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
-    `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`)globalThis.__codexP2LmItem={tool:f.tool,sourceTool:f.sourceTool,completed:f.completed};if(f.tool===\`handoff\`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
-    "route advertised tool calls through native executor"
+    `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`)globalThis.__codexP2LmItem={tool:f.tool,sourceTool:f.sourceTool,completed:f.completed};if(f.tool===\`handoff\`&&!f.sourceTool){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
+    "route local tools through generic dynamic-tool viewer while preserving native handoff execution state"
   );
 }
 
