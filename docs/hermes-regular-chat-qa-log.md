@@ -618,3 +618,149 @@ The live acceptance simultaneously proves:
 - append-only LCM continuity under the canonical key;
 - zero split rows under the bare server UUID;
 - clean SQLite/FTS/FK integrity throughout the tested isolated database.
+
+## 2026-09-09 — E5 same-process reuse and local-result presentation closure
+
+### E5 harness
+
+Reusable command: `python3 scripts/qa/hermes-chat/run.py e5`
+
+The E5 driver sends two logical tool turns in one regular Chat and one Electron process. Each logical turn accepts only the exact lifecycle delta:
+
+`hermes_tool_search → hermes_tool_describe → hermes_tool_call`
+
+Zero-tool model refusals are retryable up to three completed attempts; partial or unexpected tool sequences fail immediately. After both successful turns, E5 requires exactly one lifecycle `session_open`, one lifecycle session ID, one stable `task_id`, six successful tool calls, 12 finalized canonical LCM rows / 6 tool pairs, zero bare-server-key rows, one row-session identity, and clean SQLite/FTS/FK integrity.
+
+Harness checkpoints are pushed as:
+
+- `e548171` — `qa: add Hermes E5 same-process reuse scenario`;
+- `b947fc8` — `qa: retry E5 on tool-choice refusal`.
+
+### Live failures that localized the product defect
+
+Initial E5 attempts exposed two independent effects:
+
+1. Model choice is stochastic even when the exact local functions are named; one run refused the first logical turn and executed the second. Bounded zero-tool retries address this QA nondeterminism without weakening the successful-turn acceptance gate.
+2. After a successful local-function chain, the native Chat composer disappeared. Renderer diagnostics showed all three local calls executed and all hidden results attached, while the active item remained `tool:"handoff"`, `sourceTool:<Hermes local function>`, `completed:false`; the visible assistant payload was the synthetic handoff result envelope.
+
+The detached-composer behavior was therefore a product presentation/lifecycle defect in the Path-A handoff seam rather than a Hermes execution or LCM problem.
+
+### Rejected broader fixes
+
+Two broader fixes were implemented, validated structurally, and rejected by live evidence before final acceptance:
+
+- Replacing internal `tool:"handoff"` with the real local tool name preserved the composer but prevented the native handoff execution path from mounting, so no local tools executed.
+- Keeping internal handoff state while bypassing the top-level native handoff viewer for `sourceTool` items also preserved the composer but prevented the component that mounts the executor; normalization occurred but detector/executor counters remained empty.
+
+These failures established that the native handoff component is part of the execution path, not just presentation.
+
+### Final post-result presentation fix
+
+Pushed source checkpoint:
+
+`57d9b58` — `fix: suppress completed local handoff presentation`
+
+The final fix keeps `tool:"handoff"` and the native handoff component mounted while the local call is pending, preserving the existing `Stay in Chat` → patched local-executor path. Once a published result exists for an item carrying `sourceTool`, the handoff component returns before rendering its terminal accepted-task card. Hidden role:`tool` result pairing is unchanged.
+
+Structural coverage now proves:
+
+- fresh 26.901.51231 patching;
+- two internal handoff execution anchors remain;
+- the top-level handoff viewer mount remains;
+- exactly one completed-`sourceTool` terminal-card suppression is inserted;
+- migration from the earlier top-level bypass restores the executor-mounted path;
+- idempotence;
+- duplicate/partial migration anchors fail closed.
+
+Pre-live validation:
+
+- local-function structural suite: **7/7 pass**;
+- QA harness: **8/8 pass**;
+- related Node suite: **109 total / 97 pass / 12 expected skips / 0 failures**;
+- `git diff --check`: clean.
+
+### Candidate provenance
+
+The final candidate was recomposed from the preserved known-working ASAR used by earlier E6/D10 work:
+
+`cf7b9fdf…`
+
+Byte-level comparison proved:
+
+- `app-initial` is byte-identical to the known-working base;
+- both internal handoff execution anchors remain;
+- the viewer differs by one 80-byte completed-`sourceTool` suppression;
+- deleting that suppression reproduces the base viewer byte-for-byte;
+- top-level native handoff mount count remains 1;
+- top-level `sourceTool` bypass count is 0.
+
+Repacked candidate SHA256:
+
+`9af763bbfdacb526aa472e9d42eb1ed2f6910f4583b5921412627298cad345ca`
+
+Full ASAR round-trip validation:
+
+- source files: 8,985;
+- extracted round-trip files: 8,985;
+- missing: 0;
+- extra: 0;
+- hash/content mismatches: 0;
+- key JS bundles parse successfully;
+- `webview/index.html` is readable.
+
+Rollback backup for this installed candidate:
+
+`.codex-linux/qa/hermes-chat/20260909T220934Z-postresult-candidate-backup`
+
+### E5 final acceptance — PASS
+
+Evidence:
+
+`.codex-linux/qa/hermes-chat/20260909T221100Z-e5-same-process-reuse-f2cd5052`
+
+Result: **PASS**.
+
+Identity:
+
+- canonical conversation: `local-chatgpt:213aa1a4-8a53-4d99-becb-b67ba24bf959`;
+- server UUID: `6aa1d97e-0758-83e8-a9fc-6d566e799999`;
+- lifecycle session: `hs_codex_5776f810a9da4ee4bfee184cc737abb8`;
+- stable task ID: `chatgpt-codex:local-chatgpt:213aa1a4-8a53-4d99-becb-b67ba24bf959`.
+
+Turn 1:
+
+- `hermes_tool_search` succeeded;
+- `hermes_tool_describe` succeeded;
+- `hermes_tool_call(process_manage, {"action":"list"})` succeeded;
+- composer remained visible after completion.
+
+Turn 2, without app restart or lifecycle rotation:
+
+- `hermes_tool_search` succeeded;
+- `hermes_tool_describe` succeeded;
+- `hermes_tool_call(process_manage, {"action":"list"})` succeeded;
+- same lifecycle session/task remained in use;
+- composer remained visible after completion.
+
+Finalized LCM postconditions:
+
+- canonical rows: 12;
+- tool pairs: 6;
+- LCM total delta: 12;
+- bare server UUID rows: 0;
+- messages: 307,879;
+- FTS rows: 307,879;
+- `PRAGMA integrity_check`: `ok`;
+- foreign-key violations: 0.
+
+After stopping the dedicated QA unit, the isolated database remained clean. Final isolated DB SHA256:
+
+`728f6ad0787218fd2f6df869384ffe7488a824f34bbafde908d3f09d8ede73a3`
+
+The live shared `~/.hermes/lcm.db` remains untouched.
+
+### E5 conclusion
+
+**E5 is CLOSED/PASS and Phase B is complete.**
+
+The remaining presentation limitation is explicit: the transcript still exposes the synthetic handoff envelope instead of a polished final disclosure. Functional same-process continuation is proven because the composer remains usable after each tool turn. Final visual disclosure/productization remains under R5/Phase D and still requires current-build Computer Use proof.

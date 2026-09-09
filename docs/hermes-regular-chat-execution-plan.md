@@ -306,7 +306,7 @@ Status: **COMPLETE**
 
 ### Phase B — close D10 and identity separation
 
-Status: **IN PROGRESS**
+Status: **COMPLETE**
 
 - [x] Live-run the E6/D10 alias-continuity path against the current `_ensure_tool_session` alias-resolution fix. **PASS:** `20260909T145606Z-e6-restart-reopen-dc243350`; 6→8 canonical rows, 3→4 tool pairs, zero server-key rows, immutable prefix preserved, new lifecycle session after restart. This closes the D10 key-split defect. Full E6 acceptance is re-run after stable `task_id` separation because that criterion is intentionally not satisfied by the current implementation.
 - [x] Persist D10 evidence in the QA log and this plan.
@@ -314,7 +314,7 @@ Status: **IN PROGRESS**
 - [x] Replace lifecycle-helper Hermes `task_id` consumers with `SessionRuntime.task_id`; leave API request IDs lifecycle-session-scoped for per-request correlation.
 - [x] Unit-test restart/session-rotation behavior. **18/18 lifecycle tests pass** after a deliberate two-failure red state (`_task_id` absent and tool dispatch still session-scoped).
 - [x] Re-run E6 with explicit assertions that lifecycle `session_id` rotates while `task_id` remains identical across reopen. **PASS:** isolated-LCM run `20260909T191914Z-e6-restart-reopen-19a56ce0`; canonical key `local-chatgpt:4a9801b0-55c6-4264-bb5f-cb80fea43967`, stable task ID `chatgpt-codex:local-chatgpt:4a9801b0-55c6-4264-bb5f-cb80fea43967`, lifecycle session rotated `hs_codex_4e98340c308c44a092066e4e3c736f4d` → `hs_codex_20e56d156b184830bcf50374ce5bb2e7`, 6→12 canonical rows, 3→6 tool pairs, zero server-key rows, `integrity_check=ok`, messages=FTS=307879.
-- [ ] Re-run E5 after E6 identity acceptance. **NEXT.**
+- [x] Re-run E5 after E6 identity acceptance. **PASS:** isolated-LCM run `20260909T221100Z-e5-same-process-reuse-f2cd5052`; two consecutive regular-Chat turns each completed `hermes_tool_search → hermes_tool_describe → hermes_tool_call` in one Electron process, one lifecycle session `hs_codex_5776f810a9da4ee4bfee184cc737abb8`, and one stable task `chatgpt-codex:local-chatgpt:213aa1a4-8a53-4d99-becb-b67ba24bf959`. The composer remained visible after both turns. Clean finalization produced 12 canonical rows / 6 tool pairs, zero server-key rows, messages=FTS=307879, `integrity_check=ok`, and zero FK violations.
 
 ### Phase C — full Hermes lifecycle for regular Chat
 
@@ -442,9 +442,9 @@ Every harness defect gets the same treatment and must be distinguished from a pr
 
 Current Path-A host creation is lazy on first local `tool_call`. Historical T5 therefore expected `lifecycle_delta=0`. This conflicts with the current objective and will be changed in Phase C.
 
-### R2 — stable workspace/task identity is not yet implemented
+### R2 — stable workspace/task identity — CLOSED 2026-09-09
 
-`lifecycle_helper.py` still derives Hermes `task_id` from the rotating lifecycle `session_id` in multiple paths. This can rotate process/CWD/browser/tool workspace state across app restart. Phase B must separate these lifetimes.
+Hermes operational `task_id` now derives from the canonical logical conversation (`chatgpt-codex:<canonical conversation id>`), while `hs_codex_*` remains a rotating lifecycle epoch. Unit coverage proves stable derivation across lifecycle rotation and server-ID-only reopen. Live E6 proves the same task ID survives an Electron restart while lifecycle session identity rotates; live E5 proves two consecutive same-process tool turns reuse one lifecycle session/task.
 
 ### R3 — D10 reopen key split — CLOSED 2026-09-09
 
@@ -454,9 +454,9 @@ The `_ensure_tool_session` reverse-alias fix is now live-proven across an actual
 
 `local-function-probe` remains intentionally outside cumulative distribution. Phase D must make a supported production ownership decision.
 
-### R5 — visual completed-result disclosure needs current-build live proof
+### R5 — visual completed-result disclosure still needs Computer Use proof
 
-The source now contains result reattachment (`__codexP2ResultAttached`) and structural coverage, but a fresh current-build CDP + Computer Use proof is still required.
+Live E5 now proves functional completed-result continuation on the current candidate: both Hermes tool turns complete, hidden result pairing succeeds, and the composer remains available for the next turn. The visible transcript still shows the synthetic handoff envelope rather than final polished product disclosure, and a fresh current-build Computer Use visual proof is still required before this presentation path is considered production-ready.
 
 ### R6 — cached QA drivers are valuable but drifted
 
@@ -508,3 +508,14 @@ The cache contains proven mechanics plus accumulated historical assumptions and 
 - The live candidate used the already-proven 26.901.51231 app bundle with only the lifecycle feature resource restaged through `linux-features.js --stage-install`; staged and source helper SHA256 matched exactly (`1d1c5dba1ce5a39ec68cabaf89611b0c268ffc1a291b8b53856f97d0f415364b`). The upstream `.deb` had been cleaned from local storage, so a full package rebuild was not possible without reacquiring it.
 - Full E6 acceptance was recovered safely by using Hermes-LCM's supported `LCM_DATABASE_PATH` override plus `CODEX_HERMES_QA_LCM_DB`, both pointing at a fresh writable clone of the proven salvaged DB under a dedicated transient unit. First isolated attempt `20260909T190721Z-e6-restart-reopen-a05a1261` proved signatures were built but the model declined the meta-tools; E6 prompts were hardened to require exact `hermes_tool_search → hermes_tool_describe → hermes_tool_call` calls and committed in `a8dc78b`.
 - Deterministic isolated E6 **PASS:** `20260909T191914Z-e6-restart-reopen-19a56ce0`. Pre-restart: 6 canonical rows / 3 tool pairs / integrity `ok`. Post-restart: 12 canonical rows / 6 tool pairs / zero server-key rows / integrity `ok`; task ID remained `chatgpt-codex:local-chatgpt:4a9801b0-55c6-4264-bb5f-cb80fea43967` while lifecycle session rotated `hs_codex_4e98340c308c44a092066e4e3c736f4d` → `hs_codex_20e56d156b184830bcf50374ce5bb2e7`. Final isolated DB: 307879 messages = 307879 FTS, 0 FK violations, SHA256 `73a8d816b1b1f556fa8eed49dcdeefb9b87b2aae9df12faf12987afa7244fc2c`.
+
+### 2026-09-09 — E5 same-process reuse and Phase B closure
+
+- Reusable E5 scenario added and hardened with bounded retries for zero-tool model refusals; an attempt satisfies the logical-turn gate only when its lifecycle delta is exactly `hermes_tool_search → hermes_tool_describe → hermes_tool_call`. Partial/unexpected sequences fail closed.
+- Live E5 exposed the Path-A presentation defect that successful local results left the conversation in the native terminal handoff state with no composer. Two broader fixes were rejected by live evidence: replacing internal `tool:"handoff"` broke the executor path, and bypassing the native handoff viewer also prevented the component that mounts the executor.
+- Final fix preserves native handoff execution state and mounts the normal handoff component while the call is pending, then suppresses only its terminal accepted-result card once a `sourceTool` result has been published. Structural suite covers fresh patching, migration from the earlier bypass form, idempotence, and fail-closed duplicate anchors.
+- Source/product checkpoints are pushed through `57d9b58` (`fix: suppress completed local handoff presentation`). Full validation before live acceptance: QA **8/8**, structural **7/7**, related suite **109 total / 97 pass / 12 expected skips / 0 failures**.
+- Candidate rebuild used preserved known-working ASAR `cf7b9fdf…` as the composition base. `app-initial` remained byte-identical, including two internal handoff execution anchors. The viewer differed only by one 80-byte completed-`sourceTool` suppression; removing it reproduces the base viewer byte-for-byte. Repacked candidate SHA256: `9af763bbfdacb526aa472e9d42eb1ed2f6910f4583b5921412627298cad345ca`. Full ASAR round trip: 8985 source files / 8985 extracted files / 0 missing / 0 extra / 0 hash mismatches.
+- Isolated E5 **PASS:** `20260909T221100Z-e5-same-process-reuse-f2cd5052`. Canonical conversation `local-chatgpt:213aa1a4-8a53-4d99-becb-b67ba24bf959` used lifecycle session `hs_codex_5776f810a9da4ee4bfee184cc737abb8` and stable task `chatgpt-codex:local-chatgpt:213aa1a4-8a53-4d99-becb-b67ba24bf959` for all six successful Hermes calls across two regular-Chat turns. The composer remained visible after both turns.
+- Clean finalization produced 12 canonical rows / 6 tool pairs, zero rows under server UUID `6aa1d97e-0758-83e8-a9fc-6d566e799999`, messages=FTS=307879, `integrity_check=ok`, and zero FK violations. Frozen isolated DB SHA256: `728f6ad0787218fd2f6df869384ffe7488a824f34bbafde908d3f09d8ede73a3`.
+- **Phase B is complete.** Phase C begins with the still-open R1 defect: ordinary regular-Chat no-tool turns must enter the Hermes lifecycle before any local tool call occurs.
