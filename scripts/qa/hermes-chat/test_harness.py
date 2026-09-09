@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -14,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from app import sh_quote
+from app import sh_quote, transient_environment_args
 from cdp_client import CDPError, CDPTarget, select_shell_target
 from chat import _draft_expression
 from lifecycle import identity_pairs
@@ -173,6 +174,28 @@ class LCMTests(unittest.TestCase):
                     for sql in normalized
                 )
             )
+
+
+class AppEnvironmentTests(unittest.TestCase):
+    def test_transient_unit_forwards_only_lcm_database_override(self) -> None:
+        old_lcm = os.environ.get("LCM_DATABASE_PATH")
+        old_home = os.environ.get("HERMES_HOME")
+        try:
+            os.environ["LCM_DATABASE_PATH"] = "/tmp/hermes-qa-isolated-lcm.db"
+            os.environ["HERMES_HOME"] = "/tmp/must-not-forward"
+            self.assertEqual(
+                transient_environment_args(),
+                ["--setenv=LCM_DATABASE_PATH=/tmp/hermes-qa-isolated-lcm.db"],
+            )
+        finally:
+            if old_lcm is None:
+                os.environ.pop("LCM_DATABASE_PATH", None)
+            else:
+                os.environ["LCM_DATABASE_PATH"] = old_lcm
+            if old_home is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old_home
 
 
 class ShellQuoteTests(unittest.TestCase):

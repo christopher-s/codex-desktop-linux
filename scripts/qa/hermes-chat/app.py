@@ -28,6 +28,24 @@ class QAAppError(RuntimeError):
     pass
 
 
+_TRANSIENT_ENV_KEYS = ("LCM_DATABASE_PATH",)
+
+
+def transient_environment_args() -> list[str]:
+    """Explicit environment forwarded into the transient Electron unit.
+
+    systemd-run services do not inherit arbitrary caller environment reliably.
+    Keep this allowlist narrow so an isolated LCM QA run survives the app restart
+    inside E6 without redirecting unrelated Hermes state.
+    """
+    args: list[str] = []
+    for key in _TRANSIENT_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            args.append(f"--setenv={key}={value}")
+    return args
+
+
 def _run(argv: Sequence[str], *, check: bool = True, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout, check=False)
     if check and result.returncode != 0:
@@ -95,6 +113,7 @@ def start(config: QAAppConfig, timeout: float = 90.0) -> None:
             "--user",
             f"--unit={config.unit}",
             "--collect",
+            *transient_environment_args(),
             "/bin/bash",
             "-lc",
             command,
