@@ -9,11 +9,12 @@ Canonical execution plan: [`../../../docs/hermes-regular-chat-execution-plan.md`
 ## Preconditions
 
 - Staged app: `/home/chris/.cache/codex-merge-app` by default.
-- Independent user unit: `codex-merge-qa` by default.
+- Independent user unit: `codex-hermes-qa` by default.
 - CDP: `127.0.0.1:9243`.
 - The app must be launched with:
 
   ```text
+  --force-renderer-accessibility
   --remote-debugging-port=9243
   --remote-allow-origins=http://127.0.0.1:9243
   ```
@@ -29,6 +30,10 @@ Environment overrides:
 - `CODEX_HERMES_QA_CDP_PORT`
 - `CODEX_HERMES_QA_LIFECYCLE_LOG`
 - `CODEX_HERMES_QA_LCM_DB`
+
+## Current GNOME-session caveat
+
+On the present Wayland/GNOME login, compositor window enumeration is unavailable until the Codex WindowControl extension is loaded by a new GNOME session. `--force-renderer-accessibility` still exposes the Electron renderer through AT-SPI, and XDG Desktop Portal screenshots work. Keyboard injection through GNOME RemoteDesktop and a QA-local ydotool 1.0.4 probe did not reach Electron despite backend success reports; uinput pointer sends likewise did not produce an observed DOM focus change. Treat backend `ok:true` as a send result only. End-to-end acceptance must verify the effect independently through CDP/AT-SPI. See `docs/hermes-regular-chat-qa-log.md`.
 
 ## Design rules
 

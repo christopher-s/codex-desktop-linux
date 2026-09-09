@@ -72,22 +72,30 @@ class ComputerUseClient:
         self.notify("notifications/initialized", {})
         return self
 
+    @staticmethod
+    def _stop_process(process: subprocess.Popen[str] | None, timeout: float = 3.0) -> None:
+        if process is None:
+            return
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=timeout)
+
     def __exit__(self, exc_type, exc, tb) -> None:
         process = self._process
         self._process = None
-        if process is None:
-            return
-        if process.stdin:
+        if process is not None and process.stdin:
             process.stdin.close()
-        try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.terminate()
+        if process is not None:
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=3)
+                self._stop_process(process)
+
 
     def _write(self, message: dict[str, Any]) -> None:
         process = self._process
@@ -184,6 +192,54 @@ class ComputerUseClient:
             raise ComputerUseError("Computer Use structured result is not an object")
         return parsed
 
+    def get_app_state(
+        self,
+        app_name: str,
+        *,
+        include_screenshot: bool = False,
+        max_nodes: int = 1000,
+        max_depth: int = 48,
+    ) -> dict[str, Any]:
+        result = self.tool_call(
+            "get_app_state",
+            {
+                "app_name_or_bundle_identifier": app_name,
+                "include_screenshot": include_screenshot,
+                "max_nodes": max_nodes,
+                "max_depth": max_depth,
+            },
+        )
+        structured = self.structured(result)
+        error = structured.get("accessibility_error")
+        if error:
+            raise ComputerUseError(f"Computer Use accessibility state failed: {error}")
+        nodes = structured.get("accessibility_tree")
+        if not isinstance(nodes, list):
+            raise ComputerUseError("Computer Use get_app_state returned no accessibility_tree")
+        return structured
+
+    def click_accessible(
+        self,
+        *,
+        element_index: int | None = None,
+        role: str | None = None,
+        name: str | None = None,
+        text: str | None = None,
+    ) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"button": "left", "click_count": 1}
+        if element_index is not None:
+            arguments["element_index"] = element_index
+        if role:
+            arguments["role"] = role
+        if name:
+            arguments["name"] = name
+        if text:
+            arguments["text"] = text
+        structured = self.structured(self.tool_call("click", arguments))
+        if structured.get("ok") is not True:
+            raise ComputerUseError(f"Computer Use accessibility click failed: {structured}")
+        return structured
+
     def list_windows(self) -> list[dict[str, Any]]:
         result = self.tool_call("list_windows", {})
         structured = self.structured(result)
@@ -194,6 +250,19 @@ class ComputerUseClient:
         if not isinstance(windows, list):
             raise ComputerUseError("Computer Use list_windows returned no windows array")
         return [item for item in windows if isinstance(item, dict)]
+
+    @staticmethod
+    def _window_target_arguments(window: dict[str, Any]) -> dict[str, Any]:
+        window_id = window.get("window_id")
+        if isinstance(window_id, int):
+            return {"window_id": window_id}
+        if isinstance(window_id, str) and window_id.isdigit():
+            return {"window_id": int(window_id)}
+        if window.get("pid") is not None:
+            return {"pid": int(window["pid"])}
+        if window.get("title"):
+            return {"title": str(window["title"])}
+        raise ComputerUseError(f"Computer Use window has no usable target identity: {window}")
 
     def find_chatgpt_window(self) -> dict[str, Any]:
         candidates = []
@@ -208,21 +277,7 @@ class ComputerUseClient:
         candidates.sort(key=lambda item: (not bool(item.get("focused")), str(item.get("title") or "")))
         return candidates[0]
 
-    def screenshot_window(self, output_path: Path, window: dict[str, Any] | None = None) -> ScreenshotEvidence:
-        window = window or self.find_chatgpt_window()
-        arguments: dict[str, Any] = {"raise_window": True, "format": "png"}
-        window_id = window.get("window_id")
-        if isinstance(window_id, int):
-            arguments["window_id"] = window_id
-        elif isinstance(window_id, str) and window_id.isdigit():
-            arguments["window_id"] = int(window_id)
-        elif window.get("pid") is not None:
-            arguments["pid"] = int(window["pid"])
-        elif window.get("title"):
-            arguments["title"] = str(window["title"])
-        else:
-            raise ComputerUseError(f"Computer Use window has no usable target identity: {window}")
-
+    def _screenshot(self, output_path: Path, arguments: dict[str, Any]) -> ScreenshotEvidence:
         result = self.tool_call("screenshot", arguments)
         structured = self.structured(result)
         images = [
@@ -246,8 +301,20 @@ class ComputerUseClient:
         output_path.write_bytes(raw)
         return ScreenshotEvidence(output_path, mime_type, structured)
 
+    def screenshot_window(self, output_path: Path, window: dict[str, Any] | None = None) -> ScreenshotEvidence:
+        window = window or self.find_chatgpt_window()
+        arguments: dict[str, Any] = {"raise_window": True, "format": "png"}
+        arguments.update(self._window_target_arguments(window))
+        return self._screenshot(output_path, arguments)
+
+    def screenshot_full_screen(self, output_path: Path) -> ScreenshotEvidence:
+        return self._screenshot(output_path, {"full_screen": True, "format": "png"})
+
     def click(self, x: int, y: int) -> dict[str, Any]:
         return self.structured(self.tool_call("click", {"x": x, "y": y, "button": "left", "click_count": 1}))
 
-    def press_key(self, key: str) -> dict[str, Any]:
-        return self.structured(self.tool_call("press_key", {"key": key}))
+    def press_key(self, key: str, window: dict[str, Any] | None = None) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"key": key}
+        if window is not None:
+            arguments.update(self._window_target_arguments(window))
+        return self.structured(self.tool_call("press_key", arguments))

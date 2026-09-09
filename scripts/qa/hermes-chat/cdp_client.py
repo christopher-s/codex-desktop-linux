@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import dataclass
 import json
 import os
+import time
 from typing import Any
 import urllib.request
 
@@ -162,3 +163,20 @@ class CDPClient:
 
 def shell_target(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> CDPTarget:
     return select_shell_target(list_targets(host=host, port=port))
+
+
+def wait_for_shell_target(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    timeout: float = 45.0,
+    interval: float = 0.25,
+) -> CDPTarget:
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            return shell_target(host=host, port=port)
+        except Exception as exc:
+            last_error = exc
+            time.sleep(interval)
+    raise CDPError(f"visible shell target did not become ready within {timeout:.1f}s: {last_error}")

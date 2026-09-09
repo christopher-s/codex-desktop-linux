@@ -15,7 +15,7 @@ from typing import Sequence
 @dataclass(frozen=True)
 class QAAppConfig:
     app_dir: Path = Path(os.environ.get("CODEX_HERMES_QA_APP_DIR", "/home/chris/.cache/codex-merge-app"))
-    unit: str = os.environ.get("CODEX_HERMES_QA_UNIT", "codex-merge-qa")
+    unit: str = os.environ.get("CODEX_HERMES_QA_UNIT", "codex-hermes-qa")
     host: str = os.environ.get("CODEX_HERMES_QA_CDP_HOST", "127.0.0.1")
     port: int = int(os.environ.get("CODEX_HERMES_QA_CDP_PORT", "9243"))
 
@@ -85,6 +85,7 @@ def start(config: QAAppConfig, timeout: float = 90.0) -> None:
     # it outside the Hermes bridge service cgroup.
     command = (
         f"cd {sh_quote(str(config.app_dir))} && exec ./start.sh --no-sandbox "
+        f"--force-renderer-accessibility "
         f"--remote-debugging-port={config.port} "
         f"--remote-allow-origins={config.origin}"
     )

@@ -18,7 +18,7 @@ STATE_JS = r"""
   const visible = [...document.querySelectorAll('[contenteditable=true]')]
     .filter((node) => node.offsetParent !== null && node.isContentEditable);
   const composer = visible.length ? visible[visible.length - 1] : null;
-  const body = document.body.innerText || '';
+  const body = document.body ? (document.body.innerText || '') : '';
   const stop = [...document.querySelectorAll('button')].some((button) => {
     const label = button.getAttribute('aria-label') || button.title || '';
     return /stop|cancel/i.test(label) && button.offsetParent !== null;

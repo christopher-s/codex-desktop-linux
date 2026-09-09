@@ -102,12 +102,13 @@ No single UI/text signal should carry an acceptance test when an independent ass
 
 ## 5. QA-app isolation rules
 
-The QA Electron process must remain outside the Hermes bridge service cgroup. Use the independent user unit `codex-merge-qa` (or an equivalent independent user scope), with the staging app and CDP endpoint:
+The QA Electron process must remain outside the Hermes bridge service cgroup. Use the harness-dedicated user unit `codex-hermes-qa` (or an equivalent independent user scope), with the staging app and CDP endpoint. Do not reuse historical `codex-merge-qa` units because a stale transient unit can retain an old candidate path or launch arguments:
 
 ```bash
-systemd-run --user --unit=codex-merge-qa --collect \
+systemd-run --user --unit=codex-hermes-qa --collect \
   bash -lc 'cd /home/chris/.cache/codex-merge-app && exec ./start.sh \
-    --no-sandbox --remote-debugging-port=9243 \
+    --no-sandbox --force-renderer-accessibility \
+    --remote-debugging-port=9243 \
     --remote-allow-origins=http://127.0.0.1:9243'
 ```
 
@@ -292,16 +293,16 @@ Required:
 
 ### Phase A — freeze current baseline and commit the QA harness
 
-Status: **IN PROGRESS**
+Status: **COMPLETE**
 
 - [x] Read repository `AGENTS.md` and related Hermes/Path-A/tooling docs.
 - [x] Re-run related source tests on the current dirty worktree: 104 tests, 92 pass, 12 expected asset-dependent skips, 0 failures.
 - [x] Confirm D10 source fix is present in `_ensure_tool_session` and currently ahead of the live QA log.
 - [x] Confirm current architectural gap: text-only regular Chat remains lifecycle-free.
 - [x] Confirm current identity mismatch: Hermes `task_id` is derived from rotating `session_id` in several helper paths.
-- [ ] Create committed reusable QA harness from the proven cache drivers, removing hard-coded historical IDs and known driver bugs. **IN PROGRESS:** shared `cdp_client.py`, `app.py`, `chat.py`, `recents.py`, `lifecycle.py`, `lcm.py`, `evidence.py`, and `computer_use.py` now exist under `scripts/qa/hermes-chat/`; scenario CLI/live proof remains.
-- [x] Add focused harness unit tests for JS generation, target selection, lifecycle correlation, DB-delta assertions, and reusable primitives where testable without the live app. Initial suite: **6/6 pass** on 2026-09-08.
-- [ ] Run E0 with both CDP and Computer Use.
+- [x] Create committed reusable QA harness from the proven cache drivers, removing hard-coded historical IDs and known driver bugs. Shared `cdp_client.py`, `app.py`, `chat.py`, `recents.py`, `lifecycle.py`, `lcm.py`, `evidence.py`, `computer_use.py`, and scenario `run.py` live under `scripts/qa/hermes-chat/`.
+- [x] Add focused harness unit tests for JS generation, target selection, lifecycle correlation, DB-delta assertions, and reusable primitives where testable without the live app. Initial suite: **6/6 pass** on 2026-09-08 and remains **6/6 pass** after E0 hardening.
+- [x] Run E0 with both CDP and Computer Use. **PASS:** `20260909T045330Z-e0-sanity-463aeb85`; lifecycle delta 0, LCM delta 0, DB integrity clean. Computer Use screenshot + AT-SPI geometry independently matched the CDP composer. Current-session GNOME pointer/keyboard injection remains environment-limited and is recorded diagnostically rather than trusted from backend `ok:true` alone.
 
 ### Phase B — close D10 and identity separation
 
@@ -472,3 +473,14 @@ The cache contains proven mechanics plus accumulated historical assumptions and 
 - D10 source/log drift identified.
 - Stable `task_id` vs rotating `session_id` mismatch identified.
 - Reusable committed QA harness made the first implementation task before additional large patches.
+
+### 2026-09-09 — Phase A E0 completion
+
+- Dedicated QA ownership moved to `codex-hermes-qa` after proving the historical transient unit could retain a stale candidate path/arguments.
+- QA launch now enables `--force-renderer-accessibility`; Computer Use sees a 334-node Electron AT-SPI tree including the real `Message ChatGPT` composer.
+- Exact-shell startup races are handled by waiting for `app://-/index.html` and tolerating the brief pre-`document.body` state.
+- Current GNOME session cannot provide reliable Computer Use keyboard/pointer effect despite backend send success; failed attempts are preserved and classified as environment/Computer Use limitations rather than Hermes defects.
+- Deterministic E0 cross-check now uses Computer Use screenshot + AT-SPI geometry against CDP DOM geometry.
+- E0 **PASS**: `20260909T045330Z-e0-sanity-463aeb85`; geometry deltas all < 2 px, no Chat turn sent, lifecycle delta 0, LCM delta 0, integrity/FK/FTS checks clean.
+- Code/KISS review removed experiment-only `set_value` QA residue and retained one CDP client plus one Computer Use MCP client.
+- Dedicated live evidence log created at `docs/hermes-regular-chat-qa-log.md`.
