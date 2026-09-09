@@ -325,3 +325,85 @@ The remaining Phase B identity defect is separate: Hermes operational `task_id` 
 - The exploratory Search reopen helper was removed from reusable code during KISS review because the passing E6 path uses the exact server-ID Recents row and Search indexing was demonstrably timing-sensitive; the Search findings remain documented here.
 - Final checkpoint validation: harness **6/6 pass**; related Node suite **104 total / 92 pass / 12 expected skips / 0 failures**; `git diff --check` clean.
 - No additional product lifecycle behavior was changed while closing D10; the only product-side dependency is the pre-existing dirty `_ensure_tool_session()` alias fix under test.
+
+## 2026-09-09 — stable operational `task_id` live acceptance
+
+### Source/unit checkpoint
+
+Pushed commit: `9653c99` — `feat: stabilize Hermes task identity across chat restarts`.
+
+Before live acceptance:
+
+- canonical conversation identity remained the logical continuity key;
+- Hermes operational task identity changed to `chatgpt-codex:<canonical conversation id>`;
+- lifecycle `hs_codex_*` remains an epoch identity and is expected to rotate on app/helper restart;
+- API request IDs remain lifecycle-session-scoped;
+- lifecycle feature tests passed **18/18**;
+- related regression suite passed **105 total / 93 pass / 12 expected skips / 0 failures**;
+- QA harness passed **6/6**.
+
+### Candidate provenance
+
+The original upstream 26.901.51231 `chatgpt` `.deb` had already been cleaned from local storage. A full rebuild attempt using the remaining downstream `codex-desktop` package was rejected by `rebuild-candidate.sh` because that script correctly requires the upstream package identity.
+
+For this acceptance run, the already-proven 26.901.51231 app bundle was left intact and only the lifecycle feature resources were restaged through the supported feature mechanism:
+
+`node scripts/lib/linux-features.js --stage-install /home/chris/.cache/codex-merge-app`
+
+The staged helper and source helper matched byte-for-byte:
+
+`SHA256 1d1c5dba1ce5a39ec68cabaf89611b0c268ffc1a291b8b53856f97d0f415364b`
+
+No generated app bundle was edited directly.
+
+### Live E6 identity result
+
+Run: `20260909T172536Z-e6-restart-reopen-1accd5a1`
+
+Overall harness verdict: **FAIL** due a separate global LCM integrity gate described below.
+
+The stable-task identity criterion itself is **PASS**.
+
+Dynamic identity evidence:
+
+- canonical conversation: `local-chatgpt:007ab258-4635-4490-b3c9-1784cc6e0e5d`;
+- server UUID: `6aa19696-bf98-83e8-b958-79c670871a10`;
+- pre-restart lifecycle session: `hs_codex_0e79105bcdf74f5999c69f78a98cb389`;
+- post-restart lifecycle session: `hs_codex_5821fbb5de6f44df83de2c7d07b79062`;
+- pre-restart task ID: `chatgpt-codex:local-chatgpt:007ab258-4635-4490-b3c9-1784cc6e0e5d`;
+- post-restart task ID: `chatgpt-codex:local-chatgpt:007ab258-4635-4490-b3c9-1784cc6e0e5d`.
+
+The reusable E6 driver independently asserted:
+
+- canonical conversation unchanged across restart;
+- operational task ID unchanged across restart;
+- lifecycle session ID changed across restart;
+- reopened server UUID reverse-resolved to the original canonical conversation;
+- local Hermes tool execution completed in both lifecycle epochs.
+
+This closes the stable operational task-identity behavior in source/unit/live execution terms.
+
+### Separate LCM integrity blocker discovered during the same run
+
+Before the restart, after the first clean finalization, `LCMDatabase.integrity()` already reported:
+
+`Tree 290435 page 294110 cell 0: 2nd reference to page 300956`
+
+At that pre-restart checkpoint:
+
+- messages: `307873`;
+- messages FTS: `307865`;
+- FTS/message mismatch: 8 rows;
+- foreign-key violations: 0.
+
+After the reopened tool turn and finalization:
+
+- messages: `307875`;
+- messages FTS: `307867`;
+- mismatch remained exactly 8 rows;
+- foreign-key violations remained 0;
+- the same SQLite tree double-reference remained.
+
+Because the corruption/mismatch existed before the restart half of this E6 iteration, the harness correctly failed its global integrity gate even though the stable task/session assertions passed.
+
+No in-place repair has been attempted. The next QA iteration is read-only forensics against a copied snapshot of the LCM database, with the live DB preserved untouched.
