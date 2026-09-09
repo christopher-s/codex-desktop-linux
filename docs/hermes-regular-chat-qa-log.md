@@ -521,3 +521,100 @@ Final checkpoint validation:
 ### Live DB status
 
 No live LCM repair has been performed. A live repair, if chosen, requires a backup-first maintenance window with all LCM writers stopped, followed by post-repair integrity/digest checks before normal service resumes.
+
+## 2026-09-09 — isolated-LCM E6 acceptance
+
+### Isolation mechanism
+
+Hermes-LCM supports `LCM_DATABASE_PATH`. QA launcher commit `047c5aa` forwards that single variable into transient Electron units, and the harness uses `CODEX_HERMES_QA_LCM_DB` for its own reads. Both were pointed at the same writable clone of the proven salvaged DB, under dedicated unit `codex-hermes-qa-isolated`, so the restart inside E6 could not fall back to the corrupt shared live DB.
+
+Fresh isolated DB before E6:
+
+- source: forensic `lcm-salvaged.db`;
+- source/clone SHA256: `1330f8dcc671108ec10342e3b13108ccd0f574b7e69095ebb82b22a1e38f394b`;
+- messages: 307,867;
+- FTS rows: 307,867;
+- `PRAGMA integrity_check`: `ok`;
+- foreign-key violations: 0.
+
+The live `~/.hermes/lcm.db` was not modified or repaired.
+
+### First isolated attempt — model-choice failure, infrastructure healthy
+
+Run: `20260909T190721Z-e6-restart-reopen-a05a1261`
+
+Result: **FAIL before restart tool-history assertion**.
+
+The renderer instrumentation showed `__codexP2SignatureBuilds=2`, proving the six local function signatures were advertised. No local-function call was detected or executed. The assistant instead replied that `process_manage` was unavailable, and lifecycle finalization reported `history_messages=0`.
+
+This was a model-choice failure, not an LCM isolation or lifecycle failure. The LCM context engine opened successfully (`context_engine=lcm`, `context_engine_active=true`, empty initialization error).
+
+E6 prompts were then hardened to require the exact advertised chain:
+
+`hermes_tool_search → hermes_tool_describe → hermes_tool_call`
+
+with explicit `process_manage` arguments. That harness change is pushed as `a8dc78b` — `qa: make Hermes E6 tool invocation deterministic`.
+
+### Deterministic isolated E6 — PASS
+
+Run: `20260909T191914Z-e6-restart-reopen-19a56ce0`
+
+Result: **PASS**.
+
+Dynamic identities:
+
+- canonical conversation: `local-chatgpt:4a9801b0-55c6-4264-bb5f-cb80fea43967`;
+- server UUID: `6aa1b138-8180-83e8-8b16-10cac8337059`;
+- pre-restart lifecycle session: `hs_codex_4e98340c308c44a092066e4e3c736f4d`;
+- post-restart lifecycle session: `hs_codex_20e56d156b184830bcf50374ce5bb2e7`;
+- pre/post operational task ID: `chatgpt-codex:local-chatgpt:4a9801b0-55c6-4264-bb5f-cb80fea43967`.
+
+First epoch:
+
+- `hermes_tool_search` succeeded;
+- `hermes_tool_describe` succeeded;
+- `hermes_tool_call(process_manage, {"action":"list"})` succeeded;
+- clean finalization produced 6 canonical rows / 3 tool pairs;
+- bare server UUID had 0 rows;
+- messages = FTS = 307,873;
+- `PRAGMA integrity_check=ok`;
+- foreign-key violations: 0.
+
+Restart/reopen:
+
+- staged Electron app restarted under a new process;
+- exact server-ID Recents row was reopened through the real UI;
+- Computer Use screenshot evidence was captured;
+- server UUID reverse-resolved to the original local canonical key;
+- lifecycle session rotated;
+- operational task ID remained exactly unchanged.
+
+Second epoch:
+
+- the same deterministic three-function Hermes chain succeeded again;
+- finalization produced 12 canonical rows / 6 tool pairs;
+- exactly 6 rows appended;
+- original pre-restart prefix remained unchanged;
+- bare server UUID still had 0 rows;
+- messages = FTS = 307,879;
+- `PRAGMA integrity_check=ok`;
+- foreign-key violations: 0.
+
+After stopping the dedicated QA unit, the isolated DB remained clean. Final SHA256:
+
+`73a8d816b1b1f556fa8eed49dcdeefb9b87b2aae9df12faf12987afa7244fc2c`
+
+### E6 conclusion
+
+**Full E6 is now CLOSED/PASS** on a clean isolated LCM database without altering the corrupt live shared database.
+
+The live acceptance simultaneously proves:
+
+- canonical conversation continuity across process restart;
+- server-ID reopen alias resolution;
+- stable Hermes operational `task_id` across lifecycle rotation;
+- rotated `hs_codex_*` lifecycle session identity;
+- real regular-Chat local-function execution in both epochs;
+- append-only LCM continuity under the canonical key;
+- zero split rows under the bare server UUID;
+- clean SQLite/FTS/FK integrity throughout the tested isolated database.
