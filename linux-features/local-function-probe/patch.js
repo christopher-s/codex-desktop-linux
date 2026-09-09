@@ -107,67 +107,120 @@ function replaceExactlyOnce(source, oldText, newText, label) {
   return source.replace(oldText, newText);
 }
 
+function replaceStructuralExactlyOnce(source, pattern, replacement, label) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const matches = [...source.matchAll(new RegExp(pattern.source, flags))];
+  if (matches.length !== 1) {
+    throw new Error(`${label}: expected exactly one structural anchor, found ${matches.length}`);
+  }
+  return source.replace(pattern, replacement);
+}
+
+function replaceBalancedFunctionExactlyOnce(source, startPattern, replacement, label) {
+  const flags = startPattern.flags.includes("g") ? startPattern.flags : `${startPattern.flags}g`;
+  const matches = [...source.matchAll(new RegExp(startPattern.source, flags))];
+  if (matches.length !== 1) {
+    throw new Error(`${label}: expected exactly one structural anchor, found ${matches.length}`);
+  }
+  const match = matches[0];
+  const start = match.index;
+  const bodyBoundary = match[0].indexOf("){if");
+  if (bodyBoundary < 0) throw new Error(`${label}: function body anchor missing`);
+  const open = start + bodyBoundary + 1;
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote != null) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "`" || char === "'" || char === '"') quote = char;
+    else if (char === "{") depth += 1;
+    else if (char === "}" && --depth === 0) {
+      const whole = source.slice(start, index + 1);
+      return source.slice(0, start) + replacement(whole, ...match.slice(1)) + source.slice(index + 1);
+    }
+  }
+  throw new Error(`${label}: unterminated structural function`);
+}
+
 function patchInitial(source) {
   if (source.includes(INITIAL_MARKER)) return source;
   let out = source;
-  // Advertise the whole tool table instead of the built-in handoff.
-  const oldSignature =
-    "function tWr({config:e,isEverydayWorkMode:t,isTemporaryChat:n}){if(n)return[];let r=t?`Work mode`:`Codex`;return[{description:qUr(e.toolDescription,r),name:nWr,params:[{name:`prompt`,required:!0,type:{description:qUr(e.toolPromptParamDescription,r),type:`string`}},{name:`reason`,required:!0,type:{description:qUr(e.toolReasonParamDescription,r),type:`string`}}],type:`kwargs`}]}";
-  const newSignature = `function tWr({config:e,isEverydayWorkMode:t,isTemporaryChat:n}){if(n)return[];globalThis.__codexP2SignatureBuilds=(globalThis.__codexP2SignatureBuilds??0)+1;/*${INITIAL_MARKER}*/return ${signaturesSrc()}}`;
-  out = replaceExactlyOnce(out, oldSignature, newSignature, "replace local signature with tool table");
-  // Allow local_function_signatures through both request gates.
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "local_function_signatures:y||!r?void 0:tWr({config:l,isEverydayWorkMode:v,isTemporaryChat:g})",
-    "local_function_signatures:y?void 0:tWr({config:l,isEverydayWorkMode:v,isTemporaryChat:g})",
-    "real request local-function gate"
+    /function ([\w$]+)\(\{config:([\w$]+),isEverydayWorkMode:([\w$]+),isTemporaryChat:([\w$]+)\}\)\{if\(\4\)return\[\];let ([\w$]+)=\3\?`Work mode`:`Codex`;return\[\{description:([\w$]+)\(\2\.toolDescription,\5\),name:([\w$]+),params:\[\{name:`prompt`,required:!0,type:\{description:\6\(\2\.toolPromptParamDescription,\5\),type:`string`\}\},\{name:`reason`,required:!0,type:\{description:\6\(\2\.toolReasonParamDescription,\5\),type:`string`\}\}\],type:`kwargs`\}\]\}/,
+    (_match, signatureFn, config, everyday, temporary) =>
+      `function ${signatureFn}({config:${config},isEverydayWorkMode:${everyday},isTemporaryChat:${temporary}}){if(${temporary})return[];globalThis.__codexP2SignatureBuilds=(globalThis.__codexP2SignatureBuilds??0)+1;/*${INITIAL_MARKER}*/return ${signaturesSrc()}}`,
+    "replace local signature with tool table",
   );
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "local_function_signatures:C||!r?void 0:tWr({config:GUr(e,T),isEverydayWorkMode:u,isTemporaryChat:c})",
-    "local_function_signatures:C?void 0:tWr({config:GUr(e,T),isEverydayWorkMode:u,isTemporaryChat:c})",
-    "prepare request local-function gate"
+    /local_function_signatures:([\w$]+)\|\|!([\w$]+)\?void 0:([\w$]+)\(\{config:([\w$]+),isEverydayWorkMode:([\w$]+),isTemporaryChat:([\w$]+)\}\)/g,
+    (_match, disabled, _gate, signatureFn, config, everyday, temporary) =>
+      `local_function_signatures:${disabled}?void 0:${signatureFn}({config:${config},isEverydayWorkMode:${everyday},isTemporaryChat:${temporary}})`,
+    "local-function request gates",
   );
-  // Instrument the generic result submitter.
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "async function Ygi(e,{callId:t,conversationId:n,isTemporaryChat:r,model:i,onServerThreadIdChange:a,result:o,thinkingEffort:s,toolName:c}){let l=dL();return Xgi(e,{",
-    "async function Ygi(e,{callId:t,conversationId:n,isTemporaryChat:r,model:i,onServerThreadIdChange:a,result:o,thinkingEffort:s,toolName:c}){globalThis.__codexP2ResultsSubmitted=(globalThis.__codexP2ResultsSubmitted??0)+1;globalThis.__codexP2LastResult={callId:t,result:o,toolName:c};let l=dL();return Xgi(e,{",
-    "generic local result submitter"
+    /async function ([\w$]+)\(([\w$]+),\{callId:([\w$]+),conversationId:([\w$]+),isTemporaryChat:([\w$]+),model:([\w$]+),onServerThreadIdChange:([\w$]+),result:([\w$]+),thinkingEffort:([\w$]+),toolName:([\w$]+)\}\)\{let ([\w$]+)=([\w$]+)\(\);return ([\w$]+)\(\2,\{[\s\S]{0,2000}?onServerThreadIdChange:\7/,
+    (match, fn, scope, callId, conversationId, _temporary, _model, serverChange, result, _effort, toolName, clockVar, clockFn, submitFn) => {
+      const wrappedServerChange = `(...__p2ServerArgs)=>{let __p2ServerId=__p2ServerArgs[0];typeof __p2ServerId===\`string\`&&__p2ServerId&&globalThis.electronBridge?.hermesChatLifecycle?.({phase:\"conversation_identity\",conversation_id:__p2ServerId,client_conversation_id:${conversationId},server_conversation_id:__p2ServerId}).catch(()=>{});return ${serverChange}?.(...__p2ServerArgs)}`;
+      let patched = match.replace(`{let ${clockVar}=${clockFn}();return ${submitFn}(${scope},{`, `{globalThis.__codexP2ResultsSubmitted=(globalThis.__codexP2ResultsSubmitted??0)+1;globalThis.__codexP2LastResult={callId:${callId},result:${result},toolName:${toolName}};let ${clockVar}=${clockFn}();return ${submitFn}(${scope},{`);
+      const submitStart = patched.indexOf(`return ${submitFn}(${scope},{`);
+      if (submitStart < 0) throw new Error("generic local result submitter: submit call missing");
+      const callbackAnchor = `onServerThreadIdChange:${serverChange}`;
+      const callbackIndex = patched.indexOf(callbackAnchor, submitStart);
+      if (callbackIndex < 0) throw new Error("generic local result submitter: downstream callback anchor missing");
+      return patched.slice(0, callbackIndex) + `onServerThreadIdChange:${wrappedServerChange}` + patched.slice(callbackIndex + callbackAnchor.length);
+    },
+    "generic local result submitter",
   );
-  // Mark the hidden tool-role result so the classifier can pair it.
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "function r_i({callId:e,id:t,result:n,toolName:r}){return{author:{metadata:{},name:r,role:`tool`},channel:`commentary`,content:{content_type:`code`,text:JSON.stringify({call_id:e,result:n,tool:r})},create_time:Date.now()/1e3,end_turn:null,id:t,metadata:{is_visually_hidden_from_conversation:!0},recipient:`all`,status:`finished_successfully`,update_time:null,weight:1}}",
-    `function r_i({callId:e,id:t,result:n,toolName:r}){return{author:{metadata:{},name:r,role:\`tool\`},channel:\`commentary\`,content:{content_type:\`code\`,text:JSON.stringify({call_id:e,result:n,tool:r})},create_time:Date.now()/1e3,end_turn:null,id:t,metadata:{is_visually_hidden_from_conversation:!0,codex_local_function_result:!0},recipient:\`all\`,status:\`finished_successfully\`,update_time:null,weight:1}}/*${RESULT_PAIR_MARKER}*/`,
-    "mark hidden local function result"
+    /function ([\w$]+)\(\{callId:([\w$]+),id:([\w$]+),result:([\w$]+),toolName:([\w$]+)\}\)\{return\{author:\{metadata:\{\},name:\5,role:`tool`\},channel:`commentary`,content:\{content_type:`code`,text:JSON\.stringify\(\{call_id:\2,result:\4,tool:\5\}\)\},create_time:Date\.now\(\)\/1e3,end_turn:null,id:\3,metadata:\{is_visually_hidden_from_conversation:!0\},recipient:`all`,status:`finished_successfully`,update_time:null,weight:1\}\}/,
+    (match) => match.replace("metadata:{is_visually_hidden_from_conversation:!0}", "metadata:{is_visually_hidden_from_conversation:!0,codex_local_function_result:!0}") + `/*${RESULT_PAIR_MARKER}*/`,
+    "mark hidden local function result",
   );
-  // Normalize ANY advertised tool call to a handoff-shaped item so the native
-  // executor mounts, paired by call id; keep the bare tool name in sourceTool.
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "function uGr(e){let t=PL(e.recipient);if(t?.startsWith(`functions.`)===!0){let e=t.slice(10);return{completed:!1,pairKey:`dynamic:${e}`,tool:e}}return t?.startsWith(`local.`)===!0?{completed:e.status!==`in_progress`,pairKey:null,tool:t.slice(6)}:null}",
-    `function uGr(e){let t=PL(e.recipient);if(t?.startsWith(\`functions.\`)===!0){let n=t.slice(10),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(n);r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1);return{completed:!1,pairKey:r?\`local-function:\${jL(e)}\`:\`dynamic:\${n}\`,sourceTool:r?n:void 0,tool:r?\`handoff\`:n}}return t?.startsWith(\`local.\`)===!0?(()=>{let n=t.slice(6),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(n);return r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1),{completed:r?!1:e.status!==\`in_progress\`,pairKey:r?\`local-function:\${jL(e)}\`:null,sourceTool:r?n:void 0,tool:r?\`handoff\`:n}})():null}`,
-    "normalize advertised tool calls for native executor and pair by call id"
+    /function ([\w$]+)\(([\w$]+)\)\{let ([\w$]+)=([\w$]+)\(\2\.recipient\);if\(\3\?\.startsWith\(`functions\.`\)===!0\)\{let ([\w$]+)=\3\.slice\(10\);return\{completed:!1,pairKey:`dynamic:\$\{\5\}`,tool:\5\}\}return \3\?\.startsWith\(`local\.`\)===!0\?\{completed:\2\.status!==`in_progress`,pairKey:null,tool:\3\.slice\(6\)\}:null\}/,
+    (_match, fn, message, recipient, stringNormalizer, tool) => `function ${fn}(${message}){let ${recipient}=${stringNormalizer}(${message}.recipient);if(${recipient}?.startsWith(\`functions.\`)===!0){let ${tool}=${recipient}.slice(10),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(${tool});r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1);return{completed:!1,pairKey:r?\`local-function:\${IL(${message})}\`:\`dynamic:\${${tool}}\`,sourceTool:r?${tool}:void 0,tool:${tool}}}return ${recipient}?.startsWith(\`local.\`)===!0?(()=>{let n=${recipient}.slice(6),r=[${SIG_NAMES.map((x) => `\`${x}\``).join(",")}].includes(n);return r&&(globalThis.__codexP2Normalized=(globalThis.__codexP2Normalized??0)+1),{completed:r?!1:${message}.status!==\`in_progress\`,pairKey:r?\`local-function:\${IL(${message})}\`:null,sourceTool:r?n:void 0,tool:n}})():null}`,
+    "normalize advertised tool calls for native executor and pair by call id",
   );
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "return e.author.role===`assistant`&&u!=null&&d.success?{completed:u.completed,item:{arguments:d.data,callId:jL(e),completed:u.completed,namespace:null,tool:u.tool,type:`dynamic-tool-call`},pairKey:u.pairKey}",
-    "return e.author.role===`assistant`&&u!=null&&d.success?{completed:u.completed,item:{arguments:d.data,callId:jL(e),completed:u.completed,namespace:null,sourceTool:u.sourceTool,tool:u.tool,type:`dynamic-tool-call`},pairKey:u.pairKey}",
-    "propagate sourceTool onto dynamic tool call item"
+    /return ([\w$]+)\.author\.role===`assistant`&&([\w$]+)!=null&&([\w$]+)\.success\?\{completed:\2\.completed,item:\{arguments:\3\.data,callId:([\w$]+)\(\1\),completed:\2\.completed,namespace:null,tool:\2\.tool,type:`dynamic-tool-call`\},pairKey:\2\.pairKey\}/,
+    (match, _message, normalized) => match.replace("namespace:null,tool:", `namespace:null,sourceTool:${normalized}.sourceTool,tool:`),
+    "propagate sourceTool onto dynamic tool call item",
   );
-  // Classify the marked hidden result and attach it back to the call item.
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "function rGr(e,t){let n=NL(NL(e.metadata)?.invoked_resource);if(e.author.role!==`tool`||n==null&&e.metadata?.chatgpt_sdk==null)return null;let r=t??AL(e),i;",
-    "function rGr(e,t){if(e.author.role===`tool`&&e.metadata?.codex_local_function_result===!0){let n=t??AL(e);if(n!=null&&typeof n===`object`&&typeof n.call_id===`string`&&typeof n.tool===`string`)return{completed:!0,item:null,pairKey:`local-function:${n.call_id}`,rawPayload:n.result,localFunctionResult:!0}}let n=NL(NL(e.metadata)?.invoked_resource);if(e.author.role!==`tool`||n==null&&e.metadata?.chatgpt_sdk==null)return null;let r=t??AL(e),i;",
-    "classify marked hidden local result"
+    /function ([\w$]+)\(([\w$]+),([\w$]+)\)\{let ([\w$]+)=([\w$]+)\(\5\(\2\.metadata\)\?\.invoked_resource\);if\(\2\.author\.role!==`tool`\|\|\4==null&&\2\.metadata\?\.chatgpt_sdk==null\)return null;let ([\w$]+)=\3\?\?([\w$]+)\(\2\),([\w$]+);/,
+    (match, _fn, message, parsed, _invoked, _objectNormalizer, _payload, parser) => match.replace("{let", `{if(${message}.author.role===\`tool\`&&${message}.metadata?.codex_local_function_result===!0){let n=${parsed}??${parser}(${message});if(n!=null&&typeof n===\`object\`&&typeof n.call_id===\`string\`&&typeof n.tool===\`string\`)return{completed:!0,item:null,pairKey:\`local-function:\${n.call_id}\`,rawPayload:n.result,localFunctionResult:!0}}let`),
+    "classify marked hidden local result",
   );
-  out = replaceExactlyOnce(
+  out = replaceStructuralExactlyOnce(
     out,
-    "function eGr(e,t,n){let r=(t.pairKey==null?null:KWr(e,n))??t.item;return r==null?n?.item.type===`mcp-tool-call`?{...n,item:t.rawPayload===void 0&&t.error==null?{...n.item,completed:!0}:iGr({item:n.item,rawPayload:t.rawPayload,error:t.error,toolIcons:t.toolIcons}),sourceMessage:e}:null:{item:r,role:e.author.role===`assistant`?`assistant`:`tool`,sourceMessage:e,turnId:kL(e)??n?.turnId??null}}",
-    "function eGr(e,t,n){let r=(t.pairKey==null?null:KWr(e,n))??t.item;return r==null?t.localFunctionResult===!0&&n?.item.type===`dynamic-tool-call`?(globalThis.__codexP2ResultAttached=(globalThis.__codexP2ResultAttached??0)+1,globalThis.__codexP2AttachedItem={tool:n.item.sourceTool??n.item.tool,callId:n.item.callId,result:t.rawPayload},{...n,item:{...n.item,completed:!0,result:t.rawPayload,tool:n.item.sourceTool??n.item.tool},sourceMessage:e}):n?.item.type===`mcp-tool-call`?{...n,item:t.rawPayload===void 0&&t.error==null?{...n.item,completed:!0}:iGr({item:n.item,rawPayload:t.rawPayload,error:t.error,toolIcons:t.toolIcons}),sourceMessage:e}:null:{item:r,role:e.author.role===`assistant`?`assistant`:`tool`,sourceMessage:e,turnId:kL(e)??n?.turnId??null}}",
-    "attach marked result to dynamic tool call"
+    /function ([\w$]+)\(([\w$]+),([\w$]+),([\w$]+)\)\{let ([\w$]+)=\(\3\.pairKey==null\?null:([\w$]+)\(\2,\4\)\)\?\?\3\.item;return \5==null\?\4\?\.item\.type===`mcp-tool-call`\?\{[^{}]*\.\.\.\4,item:[^{}]*\{\.\.\.\4\.item,completed:!0\}:[\w$]+\(\{item:\4\.item,rawPayload:\3\.rawPayload,error:\3\.error,toolIcons:\3\.toolIcons\}\),sourceMessage:\2\}:null:\{item:\5,role:\2\.author\.role===`assistant`\?`assistant`:`tool`,sourceMessage:\2,turnId:([\w$]+)\(\2\)\?\?\4\?\.turnId\?\?null\}\}/,
+    (match, fn, message, classified, previous, item, hostedCombiner, turnId) => {
+      const fallback = match.slice(match.indexOf(`${previous}?.item.type===\`mcp-tool-call\``));
+      const colon = fallback.lastIndexOf(":null:{item:");
+      const tail = fallback.slice(colon);
+      return `function ${fn}(${message},${classified},${previous}){let ${item}=(${classified}.pairKey==null?null:${hostedCombiner}(${message},${previous}))??${classified}.item;return ${item}==null?${classified}.localFunctionResult===!0&&${previous}?.item.type===\`dynamic-tool-call\`?(globalThis.__codexP2ResultAttached=(globalThis.__codexP2ResultAttached??0)+1,globalThis.__codexP2AttachedItem={tool:${previous}.item.sourceTool??${previous}.item.tool,callId:${previous}.item.callId,result:${classified}.rawPayload},{...${previous},item:{...${previous}.item,completed:!0,result:${classified}.rawPayload,tool:${previous}.item.sourceTool??${previous}.item.tool},sourceMessage:${message}}):${fallback.slice(0, colon)}${tail}`;
+    },
+    "attach marked result to dynamic tool call",
+  );
+  out = replaceStructuralExactlyOnce(
+    out,
+    /([\w$]+)=([\w$]+)=>\{\2!==([\w$]+)&&\(([\w$]+)\(([\w$]+),([\w$]+),\2\),([\w$]+)\(\5,\6\),\3=([\w$]+)\(\2\),([\w$]+)\.serverConversationId=\3,([\w$]+)\.onServerThreadIdChange\?\.?\(\3\)\)\}/,
+    (_match, fn, arg, serverId, mapFn, scope, localId, fn2, canonicalFn, record, opts) =>
+      `${fn}=${arg}=>{${arg}!==${serverId}&&(${mapFn}(${scope},${localId},${arg}),${fn2}(${scope},${localId}),${serverId}=${canonicalFn}(${arg}),typeof ${serverId}===\`string\`&&${serverId}&&globalThis.electronBridge?.hermesChatLifecycle?.({phase:"conversation_identity",conversation_id:${serverId},client_conversation_id:${localId},server_conversation_id:${serverId}}).catch(()=>{}),${record}.serverConversationId=${serverId},${opts}.onServerThreadIdChange?.(${serverId}))}`,
+    "dispatch conversation identity on completion stream server thread id change",
   );
   return out;
 }
@@ -175,43 +228,41 @@ function patchInitial(source) {
 function patchPrimary(source) {
   if (source.includes(PRIMARY_MARKER)) return source;
   let out = source;
-  // Detector: accept ANY advertised tool (functions./local.); recover the bare
-  // name and pass the RAW args object through (the executor validates/dispatch
-  // is generic — we no longer pin a single zod schema). isEqual keys on callId.
-  out = replaceExactlyOnce(
+  let detectorStructure = null;
+  out = replaceStructuralExactlyOnce(
     out,
-    "I0t=$n(yi,(e,{get:t})=>{if(!t(ly))return null;let n=t(b_,e),r=t(hv,e);if(n==null||r==null)return null;let i=r[n]?.message,a=Ov(i?.recipient);if(i?.author.role!==`assistant`||i.status===`in_progress`||a!==`functions.handoff`&&a!==`local.handoff`)return null;let o=N0t.safeParse(wVe(i));return o.success?{callId:Jae(i),...o.data}:null},{isEqual:(e,t)=>e?.callId===t?.callId&&e?.prompt===t?.prompt&&e?.reason===t?.reason})",
-    `I0t=$n(yi,(e,{get:t})=>{let n=t(b_,e),r=t(hv,e);if(n==null||r==null)return null;let i=r[n]?.message,a=Ov(i?.recipient),__tool=${recipientPred("a")};__tool&&(globalThis.__codexP2Detected=(globalThis.__codexP2Detected??0)+1,globalThis.__codexP2LastRecipient=a);/*${PRIMARY_MARKER}*/if(i?.author.role!==\`assistant\`||__tool==null)return null;let __args=wVe(i);return{callId:Jae(i),__p2tool:__tool,__p2args:__args}},{isEqual:(e,t)=>e?.callId===t?.callId})`,
-    "multi-tool detector for advertised tools"
+    /([\w$]+)=([\w$]+)\(([\w$]+),\(([\w$]+),\{get:([\w$]+)\}\)=>\{if\(!\5\(([\w$]+)\)\)return null;let ([\w$]+)=\5\(([\w$]+),\4\),([\w$]+)=\5\(([\w$]+),\4\);if\(\7==null\|\|\9==null\)return null;let ([\w$]+)=\9\[\7\]\?\.message,([\w$]+)=([\w$]+)\(\11\?\.recipient\);if\(\11\?\.author\.role!==`assistant`\|\|\11\.status===`in_progress`\|\|\12!==`functions\.handoff`&&\12!==`local\.handoff`\)return null;let ([\w$]+)=([\w$]+)\.safeParse\(([\w$]+)\(\11\)\);return \14\.success\?\{callId:([\w$]+)\(\11\),\.\.\.\14\.data\}:null\},\{isEqual:\(([\w$]+),([\w$]+)\)=>\18\?\.callId===\19\?\.callId&&\18\?\.prompt===\19\?\.prompt&&\18\?\.reason===\19\?\.reason\}\)/,
+    (_match, detector, selector, store, key, get, _gate, node, currentNodeAtom, mapping, mappingAtom, message, recipient, recipientNormalizer, _parsed, _schema, argsParser, callId, left, right) => {
+      detectorStructure = { mappingAtom, recipientNormalizer, argsParser };
+      return `${detector}=${selector}(${store},(${key},{get:${get}})=>{let ${node}=${get}(${currentNodeAtom},${key}),${mapping}=${get}(${mappingAtom},${key});if(${node}==null||${mapping}==null)return null;let ${message}=${mapping}[${node}]?.message,${recipient}=${recipientNormalizer}(${message}?.recipient),__tool=${recipientPred(recipient)};__tool&&(globalThis.__codexP2Detected=(globalThis.__codexP2Detected??0)+1,globalThis.__codexP2LastRecipient=${recipient});/*${PRIMARY_MARKER}*/if(${message}?.author.role!==\`assistant\`||__tool==null)return null;let __args=${argsParser}(${message});return{callId:${callId}(${message}),__p2tool:__tool,__p2args:__args}},{isEqual:(${left},${right})=>${left}?.callId===${right}?.callId})`;
+    },
+    "multi-tool detector for advertised tools",
   );
-  // Executor: read the raw args + bare tool name from the message recipient,
-  // then dispatch through the Hermes lifecycle host IPC (tool_call phase) so the
-  // call executes against the SAME Hermes runtime/session the lifecycle feature
-  // maintains — no HTTP endpoint, no bridge, no second process. Falls back to
-  // the loopback endpoint only if the lifecycle bridge is unavailable.
-  const oldExec =
-    "async function D0t(e,{callId:t,conversationId:n,isTemporaryChat:r,model:i,thinkingEffort:a}){if(!(e.get(EU,{callId:t,conversationId:n})!=null||e.get(R0t,t))){e.set(DU,t,{pending:!0,decision:null,failedPublication:null});try{await yme(e,{callId:t,conversationId:n,...r?{isTemporaryChat:!0}:{},result:{accepted:!1,message:lwe(e).rejectedResponse},model:i,thinkingEffort:a,toolName:hke}),O0t(e)}catch(e){mp.error(`Failed to reject ChatGPT Codex suggestion`,{safe:{},sensitive:{error:e}})}finally{e.set(DU,t,e=>({...e,pending:!1}))}}}";
-  const newExec =
-    "async function D0t(e,{callId:t,conversationId:n,isTemporaryChat:r,model:i,thinkingEffort:a}){if(!(e.get(EU,{callId:t,conversationId:n})!=null||e.get(R0t,t))){e.set(DU,t,{pending:!0,decision:null,failedPublication:null});try{" +
-    "let __p2Msg=e.get(hv,n)?.[t]?.message,__p2Rec=Ov(__p2Msg?.recipient),__p2Tool=" + recipientPred("__p2Rec") + ",__p2Args=wVe(__p2Msg);" +
-    "globalThis.__codexP2ExecCalls=(globalThis.__codexP2ExecCalls??[]).concat([{callId:t,tool:__p2Tool,args:__p2Args}]);/*" + EXEC_MARKER + "*/" +
-    "let __p2Text;" +
-    "try{" +
-      "let __p2Bridge=globalThis.electronBridge?.hermesChatLifecycle,__p2Json=null;" +
-      "if(typeof __p2Bridge===\"function\"){" +
-        "__p2Json=await __p2Bridge({phase:\"tool_call\",name:__p2Tool,arguments:__p2Args,callId:t,conversationId:n,session_id:n,client_conversation_id:n});" +
-        "globalThis.__codexP2Dispatch=\"ipc\";" +
-      "}else{" +
-        "let __p2Resp=await fetch(\"" + ENDPOINT + "\",{method:\"POST\",headers:{\"content-type\":\"application/json\"},body:JSON.stringify({name:__p2Tool,arguments:__p2Args})});" +
-        "__p2Json=await __p2Resp.json();globalThis.__codexP2Dispatch=\"http-fallback\";" +
-      "}" +
-      "globalThis.__codexP2EndpointResp=(globalThis.__codexP2EndpointResp??[]).concat([{tool:__p2Tool,resp:__p2Json}]);" +
-      "__p2Text=__p2Json&&__p2Json.ok?JSON.stringify(__p2Json.result):\"P2-TOOL-ERROR: \"+JSON.stringify(__p2Json)" +
-    "}catch(__p2Err){__p2Text=\"P2-DISPATCH-ERROR: \"+String(__p2Err&&__p2Err.message);globalThis.__codexP2FetchError=String(__p2Err)}" +
-    "await yme(e,{callId:t,conversationId:n,...r?{isTemporaryChat:!0}:{},result:{accepted:!1,message:__p2Text},model:i,thinkingEffort:a,toolName:hke}),O0t(e)" +
-    "}catch(e){mp.error(`Failed to reject ChatGPT Codex suggestion`,{safe:{},sensitive:{error:e}})}finally{e.set(DU,t,e=>({...e,pending:!1}))}}}";
-  out = replaceExactlyOnce(out, oldExec, newExec, "generic executor dispatches via lifecycle IPC");
+  out = replaceBalancedFunctionExactlyOnce(
+    out,
+    /async function ([\w$]+)\(([\w$]+),\{callId:([\w$]+),conversationId:([\w$]+),isTemporaryChat:([\w$]+),model:([\w$]+),thinkingEffort:([\w$]+)\}\)\{if\(!\(\2\.get\(([\w$]+),\{callId:\3,conversationId:\4\}\)!=null\|\|\2\.get\(([\w$]+),\3\)\)\)\{\2\.set\(([\w$]+),\3,\{pending:!0,decision:null,failedPublication:null\}\);try\{await ([\w$]+)\(\2,\{callId:\3,conversationId:\4/,
+    (whole, fn, scope, callId, conversationId, temporary, model, effort, resultAtom, pendingAtom, stateAtom, submitter) => {
+      const escapedScope = scope.replace(/[$]/g, "\\$");
+      const escapedStateAtom = stateAtom.replace(/[$]/g, "\\$");
+      const escapedCallId = callId.replace(/[$]/g, "\\$");
+      const responseFn = whole.match(new RegExp(`message:([\\w$]+)\\(${escapedScope}\\)\\.rejectedResponse`))?.[1];
+      const toolName = whole.match(/toolName:([\w$]+)\}\)/)?.[1];
+      const action = whole.match(new RegExp(`\\),([\\w$]+)\\(${escapedScope}\\)\\}catch`))?.[1];
+      const caught = whole.match(/catch\(([\w$]+)\)/)?.[1];
+      const logger = whole.match(/catch\([\w$]+\)\{([\w$]+)\.error/)?.[1];
+      const state = whole.match(new RegExp(`\\.set\\(${escapedStateAtom},${escapedCallId},([\\w$]+)=>`))?.[1];
+      if (![responseFn, toolName, action, caught, logger, state].every(Boolean)) throw new Error(`generic executor dispatches via lifecycle IPC: incomplete structural captures ${JSON.stringify({ responseFn, toolName, action, caught, logger, state })}`);
+      return `async function ${fn}(${scope},{callId:${callId},conversationId:${conversationId},isTemporaryChat:${temporary},model:${model},thinkingEffort:${effort}}){if(!(${scope}.get(${resultAtom},{callId:${callId},conversationId:${conversationId}})!=null||${scope}.get(${pendingAtom},${callId}))){${scope}.set(${stateAtom},${callId},{pending:!0,decision:null,failedPublication:null});try{let __p2Msg=${scope}.get(${detectorStructure.mappingAtom},${conversationId})?.[${callId}]?.message,__p2Rec=${detectorStructure.recipientNormalizer}(__p2Msg?.recipient),__p2Tool=${recipientPred("__p2Rec")},__p2Args=${detectorStructure.argsParser}(__p2Msg);globalThis.__codexP2ExecCalls=(globalThis.__codexP2ExecCalls??[]).concat([{callId:${callId},tool:__p2Tool,args:__p2Args}]);/*${EXEC_MARKER}*/let __p2Text;try{let __p2Bridge=globalThis.electronBridge?.hermesChatLifecycle,__p2Json=null;if(typeof __p2Bridge===\"function\"){__p2Json=await __p2Bridge({phase:\"tool_call\",name:__p2Tool,arguments:__p2Args,callId:${callId},conversationId:${conversationId},session_id:${conversationId},client_conversation_id:${conversationId}});globalThis.__codexP2Dispatch=\"ipc\"}else{let __p2Resp=await fetch(\"${ENDPOINT}\",{method:\"POST\",headers:{\"content-type\":\"application/json\"},body:JSON.stringify({name:__p2Tool,arguments:__p2Args})});__p2Json=await __p2Resp.json();globalThis.__codexP2Dispatch=\"http-fallback\"}globalThis.__codexP2EndpointResp=(globalThis.__codexP2EndpointResp??[]).concat([{tool:__p2Tool,resp:__p2Json}]);__p2Text=__p2Json&&__p2Json.ok?JSON.stringify(__p2Json.result):\"P2-TOOL-ERROR: \"+JSON.stringify(__p2Json)}catch(__p2Err){__p2Text=\"P2-DISPATCH-ERROR: \"+String(__p2Err&&__p2Err.message);globalThis.__codexP2FetchError=String(__p2Err)}await ${submitter}(${scope},{callId:${callId},conversationId:${conversationId},...${temporary}?{isTemporaryChat:!0}:{},result:{accepted:!0,thread_id:\`p2ok-\${${callId}}\`,message:__p2Text},model:${model},thinkingEffort:${effort},toolName:${toolName}}),${action}(${scope},${acceptedActionEnumFromSource(out)}.CODEX_CHATGPT_HANDOFF_LIFECYCLE_ACTION_ACCEPTED)}catch(${caught}){${logger}.error(\`Failed to reject ChatGPT Codex suggestion\`,{safe:{},sensitive:{error:${caught}}})}finally{${scope}.set(${stateAtom},${callId},${state}=>({...${state},pending:!1}))}}}`;
+    },
+    "generic executor dispatches via lifecycle IPC",
+  );
   return out;
+}
+
+function acceptedActionEnumFromSource(source) {
+  const match = source.match(/function [\w$]+\([\w$]+\)\{([\w$]+)\([\w$]+,([\w$]+)\.CODEX_CHATGPT_HANDOFF_LIFECYCLE_ACTION_REJECTED\)\}/);
+  if (!match) throw new Error("accepted action enum: expected exactly one structural anchor, found 0");
+  return match[2];
 }
 
 function patchViewer(source) {

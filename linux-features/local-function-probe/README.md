@@ -41,7 +41,8 @@ model emits local.<tool>
           → main-bundle tool_call bypass (conversation-keyed, no gizmo)
           → lifecycle_helper.py _handle_tool_call
           → model_tools.handle_function_call (shared runtime)
-  → result {accepted:false, message:<tool output>}
+  → result {accepted:true, thread_id:"p2ok-<callId>", message:<tool output>}
+  → hidden role:"tool" result pairs by call id and completes the dynamic-tool item
   → assistant consumes the result and continues
 ```
 
@@ -60,8 +61,11 @@ conversation; the client's raw conversation id is never stored as a session
 id, and a non-canonical session id in the payload is re-mapped). Every
 executed call is appended to the runtime's transcript as a `tool_call` +
 `tool` row pair, so the conversation's Hindsight sync and LCM ingestion see
-the tool activity; failed calls (registry "Unknown tool") are reported to
-the model but deliberately excluded from the transcript.
+the tool activity;
+a call the registry rejects ("Unknown tool") is reported to the model with
+the registry's error text *and* is also appended (the `tool` row carries
+`result:"Unknown tool: <name>"` — verified in T2), so the transcript
+records the attempt faithfully.
 
 ## Why no dispatcher
 
@@ -73,6 +77,17 @@ call trio) without a catch-all shim.
 
 ## Status: VERIFIED (merge build)
 
+- **Envelope semantics (T1b fix, 2026-09-08):** the executor now publishes
+  `accepted:true` (with a `thread_id`) for every dispatch result. The
+  original `accepted:false` — copied verbatim from the Codex-handoff
+  reference implementation — made the model treat a *successful* Hermes
+  tool execution as a rejection and it stopped at `tool_describe` without
+  ever executing a tool (T1b failure, root cause traced to this single
+  token; see `docs/path-a-progress-disclosure.md` §D1). A rejected call
+  still returns `accepted:true` carrying the registry's "Unknown tool"
+  error in `message` — the rejection is semantic (in the error text),
+  not transport-level.
+- **Presentation-state fix (E5, 2026-09-09):** advertised local functions keep their real tool name in the normalized `dynamic-tool-call` item instead of being rewritten to `tool:"handoff"`. The call-id pair key and `sourceTool` metadata are preserved, so hidden tool results still attach and mark the item complete while the generic dynamic-tool viewer remains active. This prevents successful local tools from entering the terminal native Codex handoff UI, which detached the Chat composer after the first tool turn.
 - Multi-signature honored: `sigBuilds` > 1, each bare tool called and executed.
 - IPC dispatch confirmed live from a plain-Chat webview:
   `hermes_read_file` → `read_file`, real file content returned, `enabled:true`.
