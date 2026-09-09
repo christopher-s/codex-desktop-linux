@@ -396,6 +396,32 @@ def command_e6(args: argparse.Namespace) -> int:
             )
         )
 
+        create_events = lifecycle.events_since(lifecycle_baseline)
+        create_opens = [
+            event
+            for event in session_open_events(create_events)
+            if event.get("conversation_id") == client_id
+        ]
+        if not create_opens:
+            raise AssertionError(
+                f"no pre-restart session_open found for canonical key {client_id}"
+            )
+        pre_open = create_opens[-1]
+        pre_session_id = str(pre_open.get("session_id") or "")
+        pre_task_id = str(pre_open.get("task_id") or "")
+        expected_task_id = f"chatgpt-codex:{client_id}"
+        if pre_task_id != expected_task_id:
+            raise AssertionError(
+                f"pre-restart task identity mismatch: expected {expected_task_id}, got {pre_task_id or '<missing>'}"
+            )
+        run.record(
+            "e6_pre_restart_identity",
+            session_id=pre_session_id,
+            task_id=pre_task_id,
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+        )
+
         # A clean stop is part of the acceptance criterion and forces lifecycle/LCM flush.
         app.stop(config)
         run.record("e6_app_stopped", port_listening=app.port_listening(config.host, config.port))
@@ -455,6 +481,30 @@ def command_e6(args: argparse.Namespace) -> int:
             raise AssertionError(
                 f"no reopened session_open resolved server ID {server_id} to canonical key {client_id}; opens={opens}"
             )
+        post_open = canonical_opens[-1]
+        post_session_id = str(post_open.get("session_id") or "")
+        post_task_id = str(post_open.get("task_id") or "")
+        if post_task_id != pre_task_id:
+            raise AssertionError(
+                f"stable task identity rotated across restart: before {pre_task_id}, after {post_task_id or '<missing>'}"
+            )
+        if post_task_id != expected_task_id:
+            raise AssertionError(
+                f"reopened task identity mismatch: expected {expected_task_id}, got {post_task_id or '<missing>'}"
+            )
+        if not pre_session_id or not post_session_id or post_session_id == pre_session_id:
+            raise AssertionError(
+                f"lifecycle session did not rotate across restart: before {pre_session_id or '<missing>'}, after {post_session_id or '<missing>'}"
+            )
+        run.record(
+            "e6_post_restart_identity",
+            pre_session_id=pre_session_id,
+            post_session_id=post_session_id,
+            pre_task_id=pre_task_id,
+            post_task_id=post_task_id,
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+        )
         reopened_sessions = sorted(by_session(reopen_events))
         run.write_json("e6-after-restart-rows.json", [row.__dict__ for row in after_rows])
         integrity = lcm.integrity()
@@ -473,6 +523,10 @@ def command_e6(args: argparse.Namespace) -> int:
             before_tool_pairs=len(before_pairs),
             after_tool_pairs=len(after_pairs),
             server_key_rows=len(server_rows_after),
+            pre_session_id=pre_session_id,
+            post_session_id=post_session_id,
+            pre_task_id=pre_task_id,
+            post_task_id=post_task_id,
             reopened_sessions=reopened_sessions,
             lcm_total_delta=lcm.total_messages() - lcm_total_before,
             integrity=integrity,

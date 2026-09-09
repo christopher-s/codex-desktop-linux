@@ -310,10 +310,11 @@ Status: **IN PROGRESS**
 
 - [x] Live-run the E6/D10 alias-continuity path against the current `_ensure_tool_session` alias-resolution fix. **PASS:** `20260909T145606Z-e6-restart-reopen-dc243350`; 6→8 canonical rows, 3→4 tool pairs, zero server-key rows, immutable prefix preserved, new lifecycle session after restart. This closes the D10 key-split defect. Full E6 acceptance is re-run after stable `task_id` separation because that criterion is intentionally not satisfied by the current implementation.
 - [x] Persist D10 evidence in the QA log and this plan.
-- [ ] Introduce stable logical workspace/task identity independent of `hs_codex_*` session ID. **NEXT.**
-- [ ] Replace all lifecycle-helper `task_id = f"chatgpt-codex:{session_id}"` derivations with the stable workspace/task identity.
-- [ ] Unit-test restart/session-rotation behavior.
-- [ ] Re-run E5/E6.
+- [x] Introduce stable logical workspace/task identity independent of `hs_codex_*` session ID in source: `chatgpt-codex:<canonical conversation id>`, with lifecycle-session fallback only when no conversation identity exists.
+- [x] Replace lifecycle-helper Hermes `task_id` consumers with `SessionRuntime.task_id`; leave API request IDs lifecycle-session-scoped for per-request correlation.
+- [x] Unit-test restart/session-rotation behavior. **18/18 lifecycle tests pass** after a deliberate two-failure red state (`_task_id` absent and tool dispatch still session-scoped).
+- [ ] Rebuild the staged app and re-run E6 with assertions that lifecycle `session_id` rotates while `task_id` remains identical across reopen.
+- [ ] Re-run E5 after E6 identity acceptance.
 
 ### Phase C — full Hermes lifecycle for regular Chat
 
@@ -492,3 +493,12 @@ The cache contains proven mechanics plus accumulated historical assumptions and 
 - D10 supplemental proof **PASS:** `20260909T145304Z-d10-postrestart-proof-7b7c8036`; original 6 rows remained byte-identical, 2 new rows appended under the original local key, zero server-key rows, reopened server UUID resolved to the original local key under new lifecycle session `hs_codex_5e5774940d224f1da79e835528dc979b`.
 - Reusable E6 command **PASS:** `20260909T145606Z-e6-restart-reopen-dc243350`; local key `local-chatgpt:8145ca8f-1403-495f-bfe6-716535e32e98`, server UUID `6aa17388-c118-83e8-859c-af99320dd4bd`, 6→8 rows, 3→4 tool pairs, zero server-key rows, new lifecycle session `hs_codex_5027bfde8f1a45dc9348904942cfb6fc`, DB integrity/FK/FTS clean.
 - D10 key-split defect is closed. Full E6 remains scheduled after stable operational `task_id` is separated from lifecycle `session_id`, because the current helper still derives `task_id` from the rotating lifecycle session.
+
+### 2026-09-09 — stable operational task identity implementation
+
+- Architecture review froze three scopes: canonical conversation identity for logical continuity, `chatgpt-codex:<canonical conversation id>` for Hermes operational workspace/task identity, and rotating `hs_codex_*` for lifecycle epochs.
+- API request IDs remain lifecycle-session-scoped because they correlate one request inside one epoch.
+- TDD red state produced exactly two intended failures: `_task_id` absent and local tool dispatch still receiving `chatgpt-codex:<hs_codex_*>`.
+- Added `_task_id()` plus `SessionRuntime.task_id`; routed Hermes hook/context/tool consumers through the stable task identity and exposed it on `session_open` / tool diagnostics for live verification.
+- Lifecycle feature tests are now **18/18 pass**, including stable derivation across two lifecycle session IDs, server-ID-only reopen, conversation-based tool dispatch, and session fallback when conversation identity is unavailable.
+- Live E6 task-identity acceptance remains the next Phase B step before the stable-task product checkpoint is committed.

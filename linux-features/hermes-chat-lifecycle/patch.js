@@ -55,6 +55,14 @@ async function codexLinuxHermesLifecycleInvoke(e){
   // Session identity is host-owned: a missing or non-canonical (non hs_codex_*)
   // session id is key-mapped to a process-local session and normalized, so the
   // host never stores a raw conversation id as a session id.
+  if(e.phase===\`conversation_identity\`){
+    let r={...e},cn=String(r.client_conversation_id||\`\`);
+    if(!cn)return{ok:!1,enabled:!1,error:\`missing-conversation-identity\`};
+    let k=\`tool\\0${"${cn}"}\`,s=codexLinuxHermesLifecycleSessions.get(k);
+    s??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
+    codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId;
+    return await codexLinuxHermesHostRequest(r);
+  }
   if(e.phase===\`tool_call\`){
     let r={...e},cn=String(r.client_conversation_id||r.conversation_id||\`\`);
     if(cn){r.client_conversation_id=cn;r.conversation_id=cn}
@@ -167,48 +175,57 @@ function patchRendererAsset(source) {
 
   let patched = source.replace(full, injected);
 
-  const apiStartAnchor = "let p=await e.get(yR).startCompletionStream(";
-  if (countOf(patched, apiStartAnchor) !== 1) {
+  const apiStartContract = /let p=await e\.get\(([A-Za-z_$][\w$]*)\)\.startCompletionStream\(/gu;
+  const apiStartMatches = [...patched.matchAll(apiStartContract)];
+  if (apiStartMatches.length !== 1) {
     console.warn("WARN: ChatGPT completion stream start contract not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
+  const apiStartAnchor = apiStartMatches[0][0];
+  const streamAtom = apiStartMatches[0][1];
   patched = patched.replace(
     apiStartAnchor,
     `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
       `if(${RENDERER_MARKER}?.enabled===!0)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\`,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r})}catch(e){console.warn(\`[hermes-chat-lifecycle] pre_api_request failed\`,e)}` +
       `if(codexLinuxHermesPreflight?.qaFault===\`model_call_error\`){xe({error:\`qa-injected-model-call-error\`,errorKind:\`network\`,requestId:s,type:\`fetch-stream-error\`}),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
       `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
-      `codexLinuxHermesPreflight&&(codexLinuxHermesPreflight.started=!0);let p=await e.get(yR).startCompletionStream(`,
+      `codexLinuxHermesPreflight&&(codexLinuxHermesPreflight.started=!0);let p=await e.get(${streamAtom}).startCompletionStream(`,
   );
 
-  const stopHandlerAnchor = "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;";
-  if (countOf(patched, stopHandlerAnchor) !== 1) {
+  const stopHandlerContract = /(async function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{)(if\(\3\.get\(([A-Za-z_$][\w$]*),\4\)\|\|\3\.get\(([A-Za-z_$][\w$]*),\4\)\)return;)/gu;
+  const stopHandlerMatches = [...patched.matchAll(stopHandlerContract)];
+  if (stopHandlerMatches.length !== 1) {
     console.warn("WARN: ChatGPT stop handler contract not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
+  const stopHandler = stopHandlerMatches[0];
   patched = patched.replace(
-    stopHandlerAnchor,
-    "async function e_i(e,t,n){let codexLinuxHermesPendingPreflight=globalThis.__codexLinuxHermesLifecyclePreflights?.get(t);if(codexLinuxHermesPendingPreflight){codexLinuxHermesPendingPreflight.cancelled=!0;if(!codexLinuxHermesPendingPreflight.started)return}if(e.get(CH,t)||e.get(wJr,t))return;",
+    stopHandler[0],
+    `${stopHandler[1]}let codexLinuxHermesPendingPreflight=globalThis.__codexLinuxHermesLifecyclePreflights?.get(${stopHandler[4]});if(codexLinuxHermesPendingPreflight){codexLinuxHermesPendingPreflight.cancelled=!0;if(!codexLinuxHermesPendingPreflight.started)return}${stopHandler[6]}`,
   );
 
-  const streamRegisteredAnchor = "Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,";
-  if (countOf(patched, streamRegisteredAnchor) !== 1) {
+  const streamRegisteredContract = /([A-Za-z_$][\w$]*)\(\{scope:([A-Za-z_$][\w$]*),conversationId:([A-Za-z_$][\w$]*),streamRequestId:([A-Za-z_$][\w$]*)\}\),\{conversationId:\3,/gu;
+  const streamRegisteredMatches = [...patched.matchAll(streamRegisteredContract)];
+  if (streamRegisteredMatches.length !== 1) {
     console.warn("WARN: ChatGPT stream registration contract not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
+  const streamRegistered = streamRegisteredMatches[0];
   patched = patched.replace(
-    streamRegisteredAnchor,
-    "Lqr({scope:e,conversationId:u,streamRequestId:g}),codexLinuxHermesPreflightMap.delete(u),codexLinuxHermesPreflight?.cancelled&&$gi(e,u),{conversationId:u,",
+    streamRegistered[0],
+    `${streamRegistered[1]}({scope:${streamRegistered[2]},conversationId:${streamRegistered[3]},streamRequestId:${streamRegistered[4]}}),codexLinuxHermesPreflightMap.delete(${streamRegistered[3]}),codexLinuxHermesPreflight?.cancelled&&$gi(${streamRegistered[2]},${streamRegistered[3]}),{conversationId:${streamRegistered[3]},`,
   );
 
-  const successAnchor = "be=t=>{ve(t,`completed`)&&(Vfi(t),";
-  if (countOf(patched, successAnchor) !== 1) {
+  const successContract = /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\(\2,`completed`\)&&\(([A-Za-z_$][\w$]*)\(\2\),/gu;
+  const successMatches = [...patched.matchAll(successContract)];
+  if (successMatches.length !== 1) {
     console.warn("WARN: ChatGPT completion success contract not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
+  const success = successMatches[0];
   patched = patched.replace(
-    successAnchor,
-    "be=t=>{ve(t,`completed`)&&(codexLinuxHermesNotify(`complete_turn`),Vfi(t),",
+    success[0],
+    `${success[1]}=${success[2]}=>{${success[3]}(${success[2]},\`completed\`)&&(codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:ie}),${success[4]}(${success[2]}),`,
   );
 
   const errorAnchor = "xe=n=>{if(!ve(n.requestId,`failed`))return;";

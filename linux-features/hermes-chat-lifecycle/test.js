@@ -53,6 +53,33 @@ function parseAllowed(api) {
   return JSON.parse(api.allowed());
 }
 
+test("fresh plain-Chat identity provisions its session before the first tool call", async () => {
+  const { api } = manifestHarness();
+  api.stubHost();
+  const localId = "local-chatgpt:11111111-1111-4111-8111-111111111111";
+  const serverId = "22222222-2222-4222-8222-222222222222";
+
+  const identity = await api.invoke({
+    phase: "conversation_identity",
+    client_conversation_id: localId,
+    conversation_id: serverId,
+    server_conversation_id: serverId,
+  });
+
+  assert.equal(identity.ok, true, JSON.stringify(identity));
+  assert.match(identity.session_id, /^hs_codex_[0-9a-f]{32}$/);
+  assert.equal(identity.client_conversation_id, localId);
+  assert.equal(identity.server_conversation_id, serverId);
+
+  const toolCall = await api.invoke({
+    phase: "tool_call",
+    client_conversation_id: localId,
+    conversation_id: localId,
+    name: "hermes_tool_call",
+  });
+  assert.equal(toolCall.session_id, identity.session_id);
+});
+
 function isolatedHermesPythonEnv(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -251,6 +278,9 @@ test("main patch registers a trusted dedicated lifecycle IPC handler and is idem
   assert.match(patched, /if\(!n\(e\)\)return\{ok:!1,enabled:!1,error:`untrusted-ipc`\}/);
   assert.match(patched, /CODEX_HERMES_QA_FAULT===`model_call_error`/);
   assert.match(patched, /r\.phase===`close_session`&&a\?\.ok===!0/);
+  assert.match(patched, /e\.phase===`conversation_identity`/);
+  assert.ok(patched.includes('let k=`tool\\0${cn}`,s=codexLinuxHermesLifecycleSessions.get(k)'));
+  assert.ok(patched.includes('codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId'));
   assert.match(patched, /codexLinuxHermesLifecycleSessions\.delete/);
   new vm.Script(patched);
 });
@@ -305,7 +335,7 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.match(patched, /qa-injected-model-call-error/);
   assert.match(patched, /__codexLinuxHermesLifecyclePreflights/);
   assert.match(patched, /codexLinuxHermesPendingPreflight\.cancelled=!0;if\(!codexLinuxHermesPendingPreflight\.started\)return/);
-  assert.match(patched, /codexLinuxHermesNotify\(`complete_turn`\)/);
+  assert.match(patched, /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
   assert.match(patched, /codexLinuxHermesNotify\(`model_call_error`/);
   assert.match(patched, /codexLinuxHermesNotify\(`abort_turn`\)/);
   assert.match(patched, /a_i\(n\.system_context,rp\(\),!0\)/);
@@ -315,9 +345,171 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   new vm.Script(patched);
 });
 
+test("renderer patch follows current upstream minified identifiers structurally", () => {
+  const source = [
+    "'oneTurnDeveloperInstructions conversation_mode startCompletionStream';",
+    "async function Xgi(e,t){",
+    "let u='client',d=null,o={author:{role:`user`},content:{content_type:`text`,parts:[`hi`]}},s='turn',r='model';",
+    "let f=0,p0=0,m=t.projectId??e.get(dB,u),h=t.conversationOrigin===void 0?e.get(lB,u):t.conversationOrigin;",
+    "let p=await e.get(wR).startCompletionStream();",
+    "let be=t=>{ve(t,`completed`)&&(Gfi(t),done())},",
+    "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
+    "z={logCancellation:()=>ye({result:`canceled`})};",
+    "let g='stream',x=(Nqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
+    "async function i_i(e,t,n){if(e.get(CH,t)||e.get(bJr,t))return;let r=e.get(aB,t),i=e.get(mB,t);if(r==null&&i==null)return n}",
+  ].join("");
+  const patched = patchRendererAsset(source);
+  assert.notEqual(patched, source);
+  assert.match(patched, /async function i_i\(e,t,n\)\{let codexLinuxHermesPendingPreflight=/);
+  assert.match(patched, /Nqr\(\{scope:e,conversationId:u,streamRequestId:g\}\),codexLinuxHermesPreflightMap\.delete\(u\)/);
+  assert.match(patched, /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\),Gfi\(t\)/);
+});
+
 test("renderer patch leaves unrelated assets unchanged", () => {
   const source = "console.log('ordinary asset')";
   assert.equal(patchRendererAsset(source), source);
+});
+
+test("Python helper persists distinct local-handle and server-id aliases across restart", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-alias-"));
+  try {
+    const stateDir = path.join(root, "state");
+    const localId = "local-chatgpt:7a2e7014-62a7-49b6-b54a-ed660474d8b1";
+    const serverId = "6aa01de9-19d4-83e8-b789-6979e6ecbf3b";
+    const run = (payload) => spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import importlib.util, json, sys",
+          "spec = importlib.util.spec_from_file_location('lifecycle_helper_under_test', sys.argv[1])",
+          "module = importlib.util.module_from_spec(spec)",
+          "sys.modules[spec.name] = module",
+          "spec.loader.exec_module(module)",
+          "payload = json.loads(sys.argv[2])",
+          "print(module._canonical_conversation_id(payload))",
+        ].join("; "),
+        HELPER,
+        JSON.stringify(payload),
+      ],
+      {
+        encoding: "utf8",
+        env: isolatedHermesPythonEnv({ CODEX_LINUX_APP_STATE_DIR: stateDir }),
+      },
+    );
+
+    const created = run({ client_conversation_id: localId, conversation_id: localId });
+    assert.equal(created.status, 0, created.stderr);
+    assert.equal(created.stdout.trim(), localId);
+
+    const assigned = run({ client_conversation_id: localId, conversation_id: localId, server_conversation_id: serverId });
+    assert.equal(assigned.status, 0, assigned.stderr);
+    assert.equal(assigned.stdout.trim(), localId);
+
+    const reopened = run({ conversation_id: serverId });
+    assert.equal(reopened.status, 0, reopened.stderr);
+    assert.equal(reopened.stdout.trim(), localId);
+
+    const resolvedLocalAlias = run({ client_conversation_id: localId, conversation_id: localId });
+    assert.equal(resolvedLocalAlias.status, 0, resolvedLocalAlias.stderr);
+    assert.equal(resolvedLocalAlias.stdout.trim(), localId);
+
+    const conflictingServerId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const conflictingAssignment = run({ client_conversation_id: localId, conversation_id: conflictingServerId });
+    assert.equal(conflictingAssignment.status, 0, conflictingAssignment.stderr);
+    assert.equal(conflictingAssignment.stdout.trim(), localId);
+
+    const aliases = JSON.parse(fs.readFileSync(path.join(stateDir, "hermes-chat-conversation-aliases.json"), "utf8"));
+    assert.deepEqual(aliases, {
+      version: 1,
+      aliases: { [localId]: serverId },
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Python helper binds a reopened server-ID-only tool session to its saved local key", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-tool-reopen-"));
+  try {
+    const stateDir = path.join(root, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const localId = "local-chatgpt:83800000-0000-4000-8000-000000000000";
+    const serverId = "6aa0c239-0000-4000-8000-000000000000";
+    fs.writeFileSync(
+      path.join(stateDir, "hermes-chat-conversation-aliases.json"),
+      JSON.stringify({ version: 1, aliases: { [localId]: serverId } }),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import importlib.util, sys",
+          "spec = importlib.util.spec_from_file_location('lifecycle_helper_under_test', sys.argv[1])",
+          "module = importlib.util.module_from_spec(spec)",
+          "sys.modules[spec.name] = module",
+          "spec.loader.exec_module(module)",
+          "module._create_memory_manager = lambda session_id: (None, '')",
+          "module._load_hermes = lambda: {'get_plugin_context_engine': lambda: None, 'get_hermes_home': lambda: '', 'invoke_hook': lambda *args, **kwargs: []}",
+          "runtime = module._ensure_tool_session('', sys.argv[2])",
+          "print(runtime.conversation_id)",
+          "print(runtime.task_id)",
+        ].join("; "),
+        HELPER,
+        serverId,
+      ],
+      {
+        encoding: "utf8",
+        env: isolatedHermesPythonEnv({ CODEX_LINUX_APP_STATE_DIR: stateDir }),
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), [localId, `chatgpt-codex:${localId}`]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Python helper derives stable task identity from canonical conversation across lifecycle rotation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-task-id-"));
+  try {
+    const localId = "local-chatgpt:task-id-stable";
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import importlib.util, sys",
+          "spec = importlib.util.spec_from_file_location('lifecycle_helper_under_test', sys.argv[1])",
+          "module = importlib.util.module_from_spec(spec)",
+          "sys.modules[spec.name] = module",
+          "spec.loader.exec_module(module)",
+          "print(module._task_id(sys.argv[2], 'hs_codex_epoch_one'))",
+          "print(module._task_id(sys.argv[2], 'hs_codex_epoch_two'))",
+          "print(module._task_id('', 'hs_codex_fallback'))",
+        ].join("; "),
+        HELPER,
+        localId,
+      ],
+      {
+        encoding: "utf8",
+        env: isolatedHermesPythonEnv({ CODEX_LINUX_APP_STATE_DIR: path.join(root, "state") }),
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split("\n"), [
+      `chatgpt-codex:${localId}`,
+      `chatgpt-codex:${localId}`,
+      "chatgpt-codex:hs_codex_fallback",
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Python helper forwards native hook context without requiring the real Hermes install", () => {
@@ -604,7 +796,9 @@ test("persistent helper preserves one session runtime across multiple turns", as
       child.stdin.write(`${JSON.stringify({ ...payload, _request_id: requestId })}\n`);
     });
 
-    const begin1 = await request({ phase: "begin_turn", session_id: "hs_persistent", turn_id: "turn-1", gizmo_id: "g-test", conversation_id: "conversation-1", user_message: "first", model: "test-model" }, "1");
+    const localId = "local-chatgpt:11111111-1111-4111-8111-111111111111";
+    const serverId = "22222222-2222-4222-8222-222222222222";
+    const begin1 = await request({ phase: "begin_turn", session_id: "hs_persistent", turn_id: "turn-1", gizmo_id: "g-test", client_conversation_id: localId, conversation_id: localId, user_message: "first", model: "test-model" }, "1");
     assert.equal(begin1.ok, true, JSON.stringify(begin1));
     assert.equal(begin1.turn_number, 1);
     assert.equal(begin1.memory_active, true);
@@ -614,11 +808,16 @@ test("persistent helper preserves one session runtime across multiple turns", as
     assert.match(begin1.user_context, /plugin-turn-1/);
     assert.doesNotMatch(begin1.system_context, /memory-turn-1|plugin-turn/);
 
-    const preApi1 = await request({ phase: "pre_api_request", session_id: "hs_persistent", turn_id: "turn-1", gizmo_id: "g-test", conversation_id: "conversation-1", user_message: "first", model: "test-model" }, "2");
+    const preApi1 = await request({ phase: "pre_api_request", session_id: "hs_persistent", turn_id: "turn-1", gizmo_id: "g-test", client_conversation_id: localId, conversation_id: localId, user_message: "first", model: "test-model" }, "2");
     assert.equal(preApi1.api_call_count, 1);
     assert.match(preApi1.api_request_id, /chatgpt-codex:hs_persistent:turn-1:1/);
 
-    const complete1 = await request({ phase: "complete_turn", session_id: "hs_persistent", turn_id: "turn-1", gizmo_id: "g-test", conversation_id: "conversation-1", user_message: "first", assistant_message: "one", model: "test-model" }, "3");
+    const identity = await request({ phase: "conversation_identity", session_id: "hs_persistent", client_conversation_id: localId, conversation_id: serverId, server_conversation_id: serverId }, "identity");
+    assert.equal(identity.ok, true, JSON.stringify(identity));
+    assert.equal(identity.conversation_id, localId);
+    assert.equal(identity.server_conversation_id, serverId);
+
+    const complete1 = await request({ phase: "complete_turn", session_id: "hs_persistent", turn_id: "turn-1", gizmo_id: "g-test", client_conversation_id: localId, conversation_id: serverId, user_message: "first", assistant_message: "one", model: "test-model" }, "3");
     assert.equal(complete1.history_messages, 2);
     assert.equal(complete1.memory_sync_queued, true);
     assert.equal(complete1.background_review.scheduled, true);
@@ -654,6 +853,9 @@ test("persistent helper preserves one session runtime across multiple turns", as
       .split("\n")
       .map((line) => JSON.parse(line));
     assert.equal(events.filter((event) => event.event === "session_open").length, 2);
+    assert.equal(events.filter((event) => event.event === "conversation_identity_promoted").length, 0);
+    const aliases = JSON.parse(fs.readFileSync(path.join(stateDir, "hermes-chat-conversation-aliases.json"), "utf8"));
+    assert.equal(aliases.aliases[localId], serverId);
     assert.equal(events.filter((event) => event.event === "begin_turn").length, 3);
     assert.equal(events.filter((event) => event.event === "pre_api_request").length, 1);
     assert.equal(events.filter((event) => event.event === "post_api_request").length, 1);
@@ -882,7 +1084,10 @@ test("persistent helper records tool_call phases into the shared transcript (pla
         ["read_file", "hs_codex_tooltest2", "call-4"],
       ],
     );
-    assert.equal(execs[0].task_id, "chatgpt-codex:hs_codex_tooltest1");
+    assert.equal(execs[0].task_id, "chatgpt-codex:conversation-1");
+    assert.equal(execs[1].task_id, "chatgpt-codex:conversation-1");
+    assert.equal(execs[2].task_id, "chatgpt-codex:conversation-1");
+    assert.equal(execs[3].task_id, "chatgpt-codex:conversation-2");
 
     // Session close delivered the tool transcript to the memory provider.
     const endHistories = fs.readFileSync(path.join(stateDir, "session-end-history.json"), "utf8")
@@ -909,7 +1114,9 @@ test("persistent helper records tool_call phases into the shared transcript (pla
     assert.equal(events.filter((event) => event.event === "session_open").length, 2);
     const openEvents = events.filter((event) => event.event === "session_open");
     assert.equal(openEvents[0].conversation_id, "conversation-1");
+    assert.equal(openEvents[0].task_id, "chatgpt-codex:conversation-1");
     assert.equal(openEvents[1].conversation_id, "conversation-2");
+    assert.equal(openEvents[1].task_id, "chatgpt-codex:conversation-2");
   } finally {
     if (child && child.exitCode == null && !child.killed) child.kill("SIGKILL");
     fs.rmSync(root, { recursive: true, force: true });

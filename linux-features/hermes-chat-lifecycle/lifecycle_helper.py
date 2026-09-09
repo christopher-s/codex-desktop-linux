@@ -86,13 +86,96 @@ def _patch_hermes_daemon_pool_for_python314() -> None:
     daemon_pool.DaemonThreadPoolExecutor = CodexDaemonThreadPoolExecutor
 
 
+def _conversation_alias_path() -> Path:
+    state_dir = os.environ.get("CODEX_LINUX_APP_STATE_DIR")
+    if state_dir:
+        return Path(state_dir) / "hermes-chat-conversation-aliases.json"
+    return Path.home() / ".local" / "state" / "codex-linux" / "hermes-chat-conversation-aliases.json"
+
+
+def _load_conversation_aliases() -> dict[str, str]:
+    path = _conversation_alias_path()
+    try:
+        if not path.is_file() or path.stat().st_size > 262144:
+            return {}
+        document = json.loads(path.read_text(encoding="utf-8"))
+        aliases = document.get("aliases") if isinstance(document, dict) and document.get("version") == 1 else None
+        if not isinstance(aliases, dict):
+            return {}
+        return {
+            key: value
+            for key, value in aliases.items()
+            if isinstance(key, str)
+            and key.startswith("local-chatgpt:")
+            and isinstance(value, str)
+            and value
+            and not value.startswith("local-chatgpt:")
+        }
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _save_conversation_alias(local_id: str, server_id: str) -> None:
+    if not local_id.startswith("local-chatgpt:") or not server_id or server_id.startswith("local-chatgpt:"):
+        return
+    path = _conversation_alias_path()
+    aliases = _load_conversation_aliases()
+    if aliases.get(local_id) == server_id:
+        return
+    aliases[local_id] = server_id
+    document = {"version": 1, "aliases": dict(sorted(aliases.items()))}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(document, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _canonical_conversation_id(payload: dict[str, Any]) -> str:
+    client_id = str(payload.get("client_conversation_id") or "")
+    wire_id = str(payload.get("server_conversation_id") or payload.get("conversation_id") or "")
+    aliases = _load_conversation_aliases()
+    if client_id.startswith("local-chatgpt:"):
+        established_id = aliases.get(client_id)
+        if established_id and wire_id and wire_id != client_id and wire_id != established_id:
+            _log({
+                "event": "conversation_alias_conflict",
+                "client_conversation_id": client_id,
+                "established_conversation_id": established_id,
+                "rejected_conversation_id": wire_id,
+            })
+        elif not established_id and wire_id and wire_id != client_id and not wire_id.startswith("local-chatgpt:"):
+            _save_conversation_alias(client_id, wire_id)
+        return client_id
+    if wire_id:
+        local_ids = [local_id for local_id, server_id in aliases.items() if server_id == wire_id]
+        if len(local_ids) == 1:
+            return local_ids[0]
+    return wire_id or client_id
+
+
 def _conversation_id(payload: dict[str, Any]) -> str:
-    """Stable Codex-side conversation identity for Hermes/LCM bindings."""
-    return str(payload.get("client_conversation_id") or payload.get("conversation_id") or "")
+    """Canonical Codex conversation identity for Hermes/LCM bindings."""
+    return _canonical_conversation_id(payload)
+
+
+def _task_id(conversation_id: str, session_id: str) -> str:
+    """Stable Hermes operational task identity for one logical conversation.
+
+    Lifecycle sessions are epoch-scoped and intentionally rotate across app/helper
+    restart. Tool/process/CWD/browser state must instead follow the canonical
+    logical conversation whenever it exists. Session identity remains the
+    defensive fallback for payloads that predate conversation provisioning.
+    """
+    stable_id = str(conversation_id or "").strip() or str(session_id or "").strip()
+    return f"chatgpt-codex:{stable_id}"
 
 
 def _server_conversation_id(payload: dict[str, Any]) -> str:
-    return str(payload.get("conversation_id") or "")
+    conversation_id = str(payload.get("conversation_id") or "")
+    client_id = str(payload.get("client_conversation_id") or "")
+    if conversation_id.startswith("local-chatgpt:") or conversation_id == client_id:
+        return ""
+    return conversation_id
 
 
 def _message_text(value: Any) -> str:
@@ -460,6 +543,10 @@ class SessionRuntime:
     skill_review_count: int = 0
     qa_forced_review_consumed: bool = False
 
+    @property
+    def task_id(self) -> str:
+        return _task_id(self.conversation_id, self.session_id)
+
     def close(self, *, reason: str = "codex-close") -> None:
         h = _load_hermes()
         history = list(self.history)
@@ -569,6 +656,19 @@ def _session(session_id: str, payload: Optional[dict[str, Any]] = None) -> Sessi
     runtime = _SESSIONS.get(session_id)
     if runtime is not None:
         if payload:
+            # Learn the durable alias as soon as both wire identities coexist,
+            # while retaining this runtime's original context-engine binding.
+            # The canonical server identity takes effect on the next runtime.
+            if "server_conversation_id" in payload:
+                _log({
+                    "event": "conversation_identity_observed",
+                    "session_id": session_id,
+                    "phase": str(payload.get("phase") or ""),
+                    "conversation_id": str(payload.get("conversation_id") or ""),
+                    "client_conversation_id": str(payload.get("client_conversation_id") or ""),
+                    "server_conversation_id": str(payload.get("server_conversation_id") or ""),
+                })
+            _conversation_id(payload)
             runtime.server_conversation_id = _server_conversation_id(payload) or runtime.server_conversation_id
             runtime.model = str(payload.get("model") or runtime.model or "chatgpt")
         return runtime
@@ -627,6 +727,7 @@ def _session(session_id: str, payload: Optional[dict[str, Any]] = None) -> Sessi
         {
             "event": "session_open",
             "session_id": session_id,
+            "task_id": runtime.task_id,
             "conversation_id": conversation_id,
             "server_conversation_id": server_conversation_id,
             "memory_provider": provider_name,
@@ -667,7 +768,7 @@ def _base_kwargs(payload: dict[str, Any], runtime: SessionRuntime, *, assistant_
     user_text = _message_text(payload.get("user_message"))
     return {
         "session_id": runtime.session_id,
-        "task_id": f"chatgpt-codex:{runtime.session_id}",
+        "task_id": runtime.task_id,
         "turn_id": str(payload.get("turn_id") or ""),
         "user_message": user_text,
         "conversation_history": _turn_history(runtime, user_text, assistant_text),
@@ -704,7 +805,7 @@ def _pre_api_request(payload: dict[str, Any], runtime: SessionRuntime) -> dict[s
     try:
         hook_results = h["invoke_hook"](
             "pre_api_request",
-            task_id=f"chatgpt-codex:{runtime.session_id}",
+            task_id=runtime.task_id,
             turn_id=turn_id,
             api_request_id=api_request_id,
             session_id=runtime.session_id,
@@ -774,7 +875,7 @@ def _post_api_request(payload: dict[str, Any], runtime: SessionRuntime, assistan
     try:
         hook_results = h["invoke_hook"](
             "post_api_request",
-            task_id=f"chatgpt-codex:{runtime.session_id}",
+            task_id=runtime.task_id,
             turn_id=turn_id,
             api_request_id=api_request_id,
             session_id=runtime.session_id,
@@ -834,7 +935,7 @@ def _api_request_error(payload: dict[str, Any], runtime: SessionRuntime) -> tupl
     try:
         hook_results = h["invoke_hook"](
             "api_request_error",
-            task_id=f"chatgpt-codex:{runtime.session_id}",
+            task_id=runtime.task_id,
             turn_id=turn_id,
             api_request_id=api_request_id,
             session_id=runtime.session_id,
@@ -879,7 +980,7 @@ def _turn_end_hook(
         results = h["invoke_hook"](
             "on_session_end",
             session_id=runtime.session_id,
-            task_id=f"chatgpt-codex:{runtime.session_id}",
+            task_id=runtime.task_id,
             turn_id=str(payload.get("turn_id") or ""),
             completed=completed,
             failed=failed,
@@ -1018,7 +1119,7 @@ def _complete_turn(payload: dict[str, Any], runtime: SessionRuntime) -> dict[str
                 list(history),
                 usage=None,
                 turn_id=str(payload.get("turn_id") or ""),
-                task_id=f"chatgpt-codex:{runtime.session_id}",
+                task_id=runtime.task_id,
                 api_call_count=runtime.api_call_count,
                 interrupted=False,
                 failed=False,
@@ -1106,14 +1207,14 @@ def _ensure_tool_session(session_id: str, conversation_id: str) -> SessionRuntim
     the call. The runtime is the same object gizmo turns use, so tool calls
     accumulate into the same transcript that close_session finalizes.
 
-    The payload is sanitized to the client conversation id only: the tool_call
-    IPC carries no server conversation id and no model, and an existing
-    runtime's server identity must not be overwritten by the client id.
+    The tool_call IPC carries one wire conversation id and no model. Preserve
+    that id as wire identity so persisted aliases can reverse-resolve reopened
+    server ids without mutating an existing runtime's context-engine binding.
     """
     key = session_id or (f"tool\0{conversation_id}" if conversation_id else "")
     if not key:
         raise ValueError("session_id or conversation_id is required")
-    payload = {"client_conversation_id": conversation_id} if conversation_id else None
+    payload = {"conversation_id": conversation_id} if conversation_id else None
     return _session(key, payload)
 
 
@@ -1177,7 +1278,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
         }
     session_id = runtime.session_id
-    task_id = f"chatgpt-codex:{session_id}"
+    task_id = runtime.task_id
     tool_call_id = str(payload.get("callId") or payload.get("tool_call_id") or "")
 
     started = time.time()
@@ -1216,6 +1317,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "event": "tool_call",
                 "session_id": session_id,
+                "task_id": task_id,
                 "conversation_id": runtime.conversation_id,
                 "name": name,
                 "registry_name": registry_name,
@@ -1232,6 +1334,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             "name": name,
             "registry_name": registry_name,
             "session_id": session_id,
+            "task_id": task_id,
             "result": result,
             "elapsed_ms": elapsed_ms,
             "history_messages": len(runtime.history),
@@ -1242,6 +1345,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "event": "tool_call_error",
                 "session_id": session_id,
+                "task_id": task_id,
                 "conversation_id": runtime.conversation_id,
                 "name": name,
                 "registry_name": registry_name,
@@ -1268,7 +1372,7 @@ def _handle(payload: dict[str, Any]) -> dict[str, Any]:
         return _handle_tool_call(payload)
     if phase not in {
         "begin_turn", "pre_api_request", "complete_turn", "abort_turn",
-        "model_call_error", "close_session",
+        "model_call_error", "conversation_identity", "close_session",
     }:
         return {"ok": False, "error": "unsupported-phase"}
 
@@ -1281,6 +1385,15 @@ def _handle(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "enabled": True, "phase": phase, "session_id": session_id}
 
     runtime = _session(session_id, payload)
+    if phase == "conversation_identity":
+        return {
+            "ok": True,
+            "enabled": True,
+            "phase": phase,
+            "session_id": runtime.session_id,
+            "conversation_id": runtime.conversation_id,
+            "server_conversation_id": runtime.server_conversation_id,
+        }
     if phase == "begin_turn":
         return _begin_turn(payload, runtime)
     if phase == "pre_api_request":

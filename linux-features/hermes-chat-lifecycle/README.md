@@ -142,19 +142,25 @@ This ensures provider dependencies such as `hindsight-client` are available. `CO
 
 The helper also includes a narrowly scoped fallback compatibility shim for the current Hermes daemon thread pool on CPython 3.14. The installed Hermes checkout is not modified.
 
-## Stable session identity
+## Conversation, task, and lifecycle identity
 
-The main process binds:
+The integration keeps three identity scopes separate:
 
 ```text
-(gizmo_id, client_conversation_id) -> hs_codex_<uuid>
+logical conversation: canonical client conversation id (for example local-chatgpt:<uuid>)
+operational task:     chatgpt-codex:<canonical conversation id>
+lifecycle epoch:      hs_codex_<uuid>
 ```
 
-The ChatGPT client conversation ID is the stable Hermes/LCM identity. The OpenAI server conversation ID is tracked separately because it may appear/change after the first turn.
+The ChatGPT client conversation ID is the canonical Hermes/LCM continuity key. When OpenAI later assigns a server conversation UUID, the helper persists the local↔server alias so a server-ID-only reopen after app restart reverse-resolves to the original local canonical key.
 
-Lifecycle session reuse is intentionally process-local. Within one Codex main-process lifetime, repeated turns for the same `(gizmo_id, client_conversation_id)` reuse one `hs_codex_*` session. After a Codex restart, the in-memory binding is gone and the next eligible turn creates a fresh `hs_codex_*` session with `is_first_turn=true`. The ChatGPT conversation identity remains the external continuity key, while Hermes session-local caches/reviewer/plugin first-turn state deliberately rotate at the process boundary.
+The Hermes operational `task_id` is derived from that canonical conversation identity. This keeps process/CWD/browser/tool workspace identity stable across lifecycle rotation. A session-derived task id is used only as a defensive fallback when a payload has no conversation identity.
 
-This restart-as-rotation behavior is covered by an executable main-runtime test using the same conversation identity across two independent runtime contexts.
+Lifecycle session reuse remains intentionally process-local. Within one Codex main-process lifetime, repeated turns for the same logical conversation reuse one `hs_codex_*` session. After a Codex restart, the in-memory lifecycle binding is gone and the next eligible turn creates a fresh `hs_codex_*` session with `is_first_turn=true`. Session-local caches/reviewer/plugin first-turn state therefore rotate at the process boundary while canonical conversation and operational task identity remain stable.
+
+API request IDs remain lifecycle-session-scoped because they correlate one request inside one lifecycle epoch; they are intentionally distinct from the stable operational task identity.
+
+Executable helper tests cover stable `task_id` derivation across two lifecycle session IDs, server-ID-only alias reopen, and conversation-based tool dispatch.
 
 ## IPC payload normalization
 
