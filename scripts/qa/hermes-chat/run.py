@@ -287,8 +287,11 @@ async def _e6_create_phase(
 ) -> tuple[str, str]:
     target = wait_for_shell_target(config.host, config.port)
     prompt_one = (
-        f"{marker_one} — Use tool_call to execute the process_manage tool with action set to list, "
-        "then report exactly what it returned."
+        f"{marker_one} — You must use the advertised local functions, not answer from memory. "
+        "Call hermes_tool_search with queries set to 'process management'. Then call "
+        "hermes_tool_describe for process_manage. Then call hermes_tool_call with name "
+        "process_manage and arguments set to the JSON object string {\"action\":\"list\"}. "
+        "After those local function calls complete, report exactly what hermes_tool_call returned."
     )
     async with CDPClient(target, host=config.host, port=config.port) as client:
         await chat.new_chat(client, timeout=45)
@@ -316,8 +319,11 @@ async def _e6_reopen_phase(
 ) -> None:
     target = wait_for_shell_target(config.host, config.port)
     prompt_three = (
-        f"{marker_three} — Use tool_call to execute the process_manage tool with action set to list, "
-        "then report exactly what it returned."
+        f"{marker_three} — You must use the advertised local functions, not answer from memory. "
+        "Call hermes_tool_search with queries set to 'process management'. Then call "
+        "hermes_tool_describe for process_manage. Then call hermes_tool_call with name "
+        "process_manage and arguments set to the JSON object string {\"action\":\"list\"}. "
+        "After those local function calls complete, report exactly what hermes_tool_call returned."
     )
     async with CDPClient(target, host=config.host, port=config.port) as client:
         row = await recents.open_by_server_id(
