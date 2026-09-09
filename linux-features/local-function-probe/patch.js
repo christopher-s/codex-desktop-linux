@@ -148,8 +148,18 @@ function replaceBalancedFunctionExactlyOnce(source, startPattern, replacement, l
   throw new Error(`${label}: unterminated structural function`);
 }
 
+function upgradeLegacyLocalToolPresentation(source) {
+  const legacy = /sourceTool:([\w$]+)\?([\w$]+):void 0,tool:\1\?`handoff`:\2/g;
+  const matches = [...source.matchAll(legacy)];
+  if (matches.length === 0) return source;
+  if (matches.length !== 2) {
+    throw new Error(`upgrade legacy local-tool presentation: expected exactly two anchors, found ${matches.length}`);
+  }
+  return source.replace(legacy, "sourceTool:$1?$2:void 0,tool:$2");
+}
+
 function patchInitial(source) {
-  if (source.includes(INITIAL_MARKER)) return source;
+  if (source.includes(INITIAL_MARKER)) return upgradeLegacyLocalToolPresentation(source);
   let out = source;
   out = replaceStructuralExactlyOnce(
     out,

@@ -2,18 +2,42 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
 const { patchInitial, patchPrimary } = require("./patch.js");
 
 const ASSETS = "/tmp/codex-drift-2690151231/extracted/webview/assets";
+const FALLBACK_ASAR =
+  "/home/chris/.cache/codex-update-manager/workspaces/26.901.51231/codex-app/resources/app.asar";
+const FALLBACK_ASSET_PATHS = {
+  "app-initial-": "webview/assets/app-initial-9e28b0395ba3.js",
+  "app-primary-": "webview/assets/app-primary-bd4b894ed032.js",
+};
 
 function asset(prefix) {
-  const names = fs.readdirSync(ASSETS).filter((name) => name.startsWith(prefix) && name.endsWith(".js"));
-  assert.equal(names.length, 1, `expected exactly one ${prefix} asset, found ${names.length}`);
-  return fs.readFileSync(path.join(ASSETS, names[0]), "utf8");
+  if (fs.existsSync(ASSETS)) {
+    const names = fs.readdirSync(ASSETS).filter((name) => name.startsWith(prefix) && name.endsWith(".js"));
+    assert.equal(names.length, 1, `expected exactly one ${prefix} asset, found ${names.length}`);
+    return fs.readFileSync(path.join(ASSETS, names[0]), "utf8");
+  }
+  const assetPath = FALLBACK_ASSET_PATHS[prefix];
+  assert.ok(assetPath, `no fallback asset registered for ${prefix}`);
+  assert.ok(fs.existsSync(FALLBACK_ASAR), `fallback ASAR missing: ${FALLBACK_ASAR}`);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "p2-structural-asset-"));
+  try {
+    childProcess.execFileSync(
+      "npx",
+      ["--yes", "@electron/asar", "extract-file", FALLBACK_ASAR, assetPath],
+      { cwd: temporary, stdio: "ignore" },
+    );
+    return fs.readFileSync(path.join(temporary, path.basename(assetPath)), "utf8");
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function assertIdempotent(patch, source) {
@@ -53,6 +77,35 @@ test("patchInitial follows 26.901.51231 structures without pinning minified iden
     patched,
     /return [\w$]+\([\w$]+,\{[\s\S]*onServerThreadIdChange:\(\.\.\.__p2ServerArgs\)=>/,
     "wraps the callback only in the downstream submit-call object",
+  );
+});
+
+test("patchInitial upgrades exactly two legacy local-tool handoff presentation anchors", () => {
+  const legacy = [
+    "codexP2ToolSignatureRuntime",
+    "sourceTool:r?a:void 0,tool:r?`handoff`:a",
+    "sourceTool:x?b:void 0,tool:x?`handoff`:b",
+  ].join(";");
+  const upgraded = patchInitial(legacy);
+  assert.equal(
+    upgraded,
+    [
+      "codexP2ToolSignatureRuntime",
+      "sourceTool:r?a:void 0,tool:a",
+      "sourceTool:x?b:void 0,tool:b",
+    ].join(";"),
+  );
+  assert.equal(patchInitial(upgraded), upgraded);
+});
+
+test("patchInitial fails closed on a partial legacy local-tool presentation migration", () => {
+  const partial = [
+    "codexP2ToolSignatureRuntime",
+    "sourceTool:r?a:void 0,tool:r?`handoff`:a",
+  ].join(";");
+  assert.throws(
+    () => patchInitial(partial),
+    /upgrade legacy local-tool presentation: expected exactly two anchors, found 1/,
   );
 });
 
