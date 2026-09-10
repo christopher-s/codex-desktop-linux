@@ -48,7 +48,7 @@ CODEX_HERMES_GIZMO_IDS=g-abc12345,g-def67890
 
 When that override is non-empty, invalid IDs are filtered and the manifest is not used as a fallback. Registration controls only non-empty Custom GPT/Gizmo identities; project-less ordinary Chat does not require a manifest entry.
 
-The renderer does not perform a standalone lifecycle `probe` on the foreground Chat submission path. Eligibility is resolved by `begin_turn` in the trusted main process. Project-less ordinary Chat is eligible when the feature is enabled. Non-empty Custom GPT/Gizmo IDs still fail closed unless registered, and unrelated webviews keep their normal behavior. The `probe` phase remains available for diagnostics and QA controls.
+The renderer does not perform a standalone lifecycle `probe` on the foreground Chat submission path. Eligibility is resolved by `begin_turn` in the trusted main process. Project-less ordinary Chat is eligible when the feature is enabled. Non-empty Custom GPT/Gizmo IDs still fail closed unless registered, and unrelated webviews keep their normal behavior. The late-begin guard tolerates reopened/resumed request shapes where the current message object may omit `author`, so lifecycle activation checks `author?.role` defensively. The `probe` phase remains available for diagnostics and QA controls.
 
 ## What the feature currently does
 

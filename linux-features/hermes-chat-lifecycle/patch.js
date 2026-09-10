@@ -21,6 +21,7 @@ const QA_CONTROL_V2_MARKER = "codexLinuxHermesQaFaultControlsV2";
 const DEVELOPER_CONTEXT_V2_MARKER = "codexLinuxHermesDeveloperContextV2";
 const DEVELOPER_CONTEXT_V3_MARKER = "codexLinuxHermesDeveloperContextV3";
 const LATE_BEGIN_V1_MARKER = "codexLinuxHermesLateBeginV1";
+const LATE_BEGIN_V2_MARKER = "codexLinuxHermesLateBeginV2";
 const COMPLETION_FINALIZATION_V2_MARKER = "codexLinuxHermesCompletionFinalizationV2";
 const COMPLETION_FINALIZATION_V3_MARKER = "codexLinuxHermesCompletionFinalizationV3";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
@@ -233,7 +234,7 @@ function developerContextPayloadV3(contract, requestVar) {
 }
 
 function lateBeginPayload(projectVar, requestVar, developerMessageContract) {
-  return `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*//*${LATE_BEGIN_V1_MARKER}*/` +
+  return `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*//*${LATE_BEGIN_V2_MARKER}*/` +
     `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
     `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +
     `codexLinuxHermesPreflight.qaFault=n?.qa_fault??null;` +
@@ -584,33 +585,52 @@ function upgradeRendererLateBegin(source) {
     throw new Error(`Hermes lifecycle renderer begin-turn project variable is ambiguous: ${beginMatches.length}`);
   }
   const projectVar = beginMatches[0][1];
-  const lateMarker = `/*${LATE_BEGIN_V1_MARKER}*/`;
+  const lateV1Marker = `/*${LATE_BEGIN_V1_MARKER}*/`;
+  const lateV2Marker = `/*${LATE_BEGIN_V2_MARKER}*/`;
   const contextV3Marker = `/*${DEVELOPER_CONTEXT_V3_MARKER}*/`;
-  if (source.includes(lateMarker)) {
-    if (countOf(source, lateMarker) !== 1 || countOf(source, contextV3Marker) !== 1) {
+  let upgraded = source;
+
+  if (upgraded.includes(lateV1Marker)) {
+    if (countOf(upgraded, lateV1Marker) !== 1 || upgraded.includes(lateV2Marker)) {
       throw new Error("Hermes lifecycle renderer late-begin V1 marker is malformed or ambiguous");
     }
-    if (source.includes("hermesChatLifecycle?.({phase:`probe`")) {
-      throw new Error("Hermes lifecycle renderer late-begin V1 still contains an early probe");
+    const v1Gate = `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV1Marker}`;
+    const v2Gate = `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV2Marker}`;
+    if (countOf(upgraded, v1Gate) !== 1) {
+      throw new Error("Hermes lifecycle renderer late-begin V1 guard is malformed or ambiguous");
+    }
+    upgraded = upgraded.replace(v1Gate, v2Gate);
+  }
+
+  if (upgraded.includes(lateV2Marker)) {
+    if (countOf(upgraded, lateV2Marker) !== 1 || upgraded.includes(lateV1Marker) || countOf(upgraded, contextV3Marker) !== 1) {
+      throw new Error("Hermes lifecycle renderer late-begin V2 marker is malformed or ambiguous");
+    }
+    const safeGate = `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV2Marker}`;
+    if (countOf(upgraded, safeGate) !== 1) {
+      throw new Error("Hermes lifecycle renderer late-begin V2 guard is malformed or ambiguous");
+    }
+    if (upgraded.includes("hermesChatLifecycle?.({phase:`probe`")) {
+      throw new Error("Hermes lifecycle renderer late-begin V2 still contains an early probe");
     }
     const expectedContextTail = `${requestVar}.messages=[...${requestVar}.messages??[],...codexLinuxHermesContextMessages]`;
-    if (!source.includes(expectedContextTail)) {
-      throw new Error("Hermes lifecycle renderer late-begin V1 context does not target the prepared request");
+    if (!upgraded.includes(expectedContextTail)) {
+      throw new Error("Hermes lifecycle renderer late-begin V2 context does not target the prepared request");
     }
-    return source;
+    return upgraded;
   }
 
   const earlyStart = `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/`;
   const earlyEnd = "catch(e){codexLinuxHermesPreflightMap.delete(u),console.warn(`[hermes-chat-lifecycle] begin_turn failed`,e)}";
-  if (countOf(source, earlyStart) !== 1 || countOf(source, earlyEnd) !== 1) {
+  if (countOf(upgraded, earlyStart) !== 1 || countOf(upgraded, earlyEnd) !== 1) {
     throw new Error("Hermes lifecycle renderer historical early-begin block is missing or ambiguous");
   }
-  const start = source.indexOf(earlyStart);
-  const end = source.indexOf(earlyEnd, start);
+  const start = upgraded.indexOf(earlyStart);
+  const end = upgraded.indexOf(earlyEnd, start);
   if (start < 0 || end < start) {
     throw new Error("Hermes lifecycle renderer historical early-begin block bounds are invalid");
   }
-  let upgraded = source.slice(0, start) + source.slice(end + earlyEnd.length);
+  upgraded = upgraded.slice(0, start) + upgraded.slice(end + earlyEnd.length);
   const cancelGuard = "if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(`abort_turn`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}";
   const preApiPrefix = `if(${RENDERER_MARKER}?.enabled===!0&&codexLinuxHermesPreflight?.qaFault!==\`begin_only\`)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\``;
   const transportPrefix = cancelGuard + preApiPrefix;
@@ -628,11 +648,15 @@ function upgradeRendererPlainChatLifecycle(source) {
   if (!source.includes(`let ${RENDERER_MARKER}=null`)) return source;
   let upgraded = source;
   if (!upgraded.includes(`/*${PLAIN_CHAT_RENDERER_MARKER}*/`)) {
-    const lateLookahead = `/*${LATE_BEGIN_V1_MARKER}*/`;
+    const lateLookahead = upgraded.includes(`/*${LATE_BEGIN_V2_MARKER}*/`)
+      ? `/*${LATE_BEGIN_V2_MARKER}*/`
+      : `/*${LATE_BEGIN_V1_MARKER}*/`;
     if (upgraded.includes(lateLookahead)) {
       const legacyLateGate = /if\(o\?\.author\.role===`user`&&typeof ([A-Za-z_$][\w$]*)===`string`&&\1\.length>0\)try\{/gu;
       const legacyLateMatches = [...upgraded.matchAll(legacyLateGate)].filter((match) => upgraded.startsWith(lateLookahead, match.index + match[0].length));
-      const currentLateGate = "if(o?.author.role===`user`)try{";
+      const currentLateGate = lateLookahead.includes(LATE_BEGIN_V2_MARKER)
+        ? "if(o?.author?.role===`user`)try{"
+        : "if(o?.author.role===`user`)try{";
       const currentLateMatches = [];
       for (let at = upgraded.indexOf(currentLateGate); at >= 0; at = upgraded.indexOf(currentLateGate, at + currentLateGate.length)) {
         if (upgraded.startsWith(lateLookahead, at + currentLateGate.length)) currentLateMatches.push(at);

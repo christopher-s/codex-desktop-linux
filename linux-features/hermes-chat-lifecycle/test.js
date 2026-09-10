@@ -500,11 +500,12 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.equal(patchRendererAsset(ambiguousSuccess), ambiguousSuccess);
   const patched = applyTwice(patchRendererAsset, source);
   assert.doesNotMatch(patched, /phase:`probe`/);
-  assert.match(patched, /\/\*codexLinuxHermesLateBeginV1\*\//);
-  assert.match(patched, /nativeCommit\(\);if\(o\?\.author\.role===`user`\)try\{\/\*codexLinuxHermesPlainChatLifecycle\*\/\/\*codexLinuxHermesLateBeginV1\*\/.*phase:`begin_turn`/);
+  assert.match(patched, /\/\*codexLinuxHermesLateBeginV2\*\//);
+  assert.match(patched, /nativeCommit\(\);if\(o\?\.author\?\.role===`user`\)try\{\/\*codexLinuxHermesPlainChatLifecycle\*\/\/\*codexLinuxHermesLateBeginV2\*\/.*phase:`begin_turn`/);
   assert.ok(patched.indexOf("nativeCommit();") < patched.indexOf("phase:`begin_turn`"));
   assert.match(patched, /nativeCommit\(\);.*phase:`begin_turn`.*let p=await e\.get\(yR\)\.startCompletionStream\(\)/);
-  assert.match(patched, /if\(o\?\.author\.role===`user`\)try\{/);
+  assert.match(patched, /if\(o\?\.author\?\.role===`user`\)try\{/);
+  assert.doesNotMatch(patched, /if\(o\?\.author\.role===`user`\)try\{/);
   assert.doesNotMatch(patched, /o\?\.author\.role===`user`&&typeof m===`string`&&m\.length>0/);
   assert.match(patched, /phase:`pre_api_request`/);
   assert.match(patched, /codexLinuxHermesMessageText=m=>/);
@@ -559,9 +560,16 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   ].join("");
   const current = patchRendererAsset(source);
   const marker = "/*codexLinuxHermesPlainChatLifecycle*/";
-  const currentGate = `if(o?.author.role===\`user\`)try{${marker}`;
+  const currentGate = `if(o?.author?.role===\`user\`)try{${marker}`;
+  const installedV1Gate = `if(o?.author.role===\`user\`)try{${marker}/*codexLinuxHermesLateBeginV1*/`;
+  const currentV2Gate = `${currentGate}/*codexLinuxHermesLateBeginV2*/`;
   const legacyGate = "if(o?.author.role===`user`&&typeof m===`string`&&m.length>0)try{";
   assert.ok(current.includes(currentGate));
+  assert.ok(current.includes(currentV2Gate));
+
+  const installedV1 = current.replace(currentV2Gate, installedV1Gate);
+  assert.notEqual(installedV1, current);
+  assert.equal(patchRendererAsset(installedV1), current);
 
   const legacy = current.replace(currentGate, legacyGate);
   assert.notEqual(legacy, current);
@@ -571,7 +579,7 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   assert.notEqual(unversioned, current);
   assert.equal(patchRendererAsset(unversioned), current);
 
-  const lateStart = "if(o?.author.role===`user`)try{/*codexLinuxHermesPlainChatLifecycle*//*codexLinuxHermesLateBeginV1*/";
+  const lateStart = "if(o?.author?.role===`user`)try{/*codexLinuxHermesPlainChatLifecycle*//*codexLinuxHermesLateBeginV2*/";
   const lateEnd = "catch(e){if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}codexLinuxHermesPreflightMap.delete(u),codexLinuxHermesPreflight=null,console.warn(`[hermes-chat-lifecycle] begin_turn failed`,e)}";
   const lateAt = current.indexOf(lateStart);
   const lateEndAt = current.indexOf(lateEnd, lateAt);
@@ -664,7 +672,9 @@ test("renderer patch follows current upstream minified identifiers structurally"
     /\/\*codexLinuxHermesAssistantStateV2\*\/let c=I2\(e\.get,u\)\?\?u,a=e\.get\(H2,c\),h=e\.get\(X2,c\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
   );
   assert.doesNotMatch(patched, /phase:`probe`/);
-  assert.match(patched, /\/\*codexLinuxHermesLateBeginV1\*\//);
+  assert.match(patched, /\/\*codexLinuxHermesLateBeginV2\*\//);
+  assert.match(patched, /if\(o\?\.author\?\.role===`user`\)try\{/);
+  assert.doesNotMatch(patched, /if\(o\?\.author\.role===`user`\)try\{/);
   assert.match(patched, /\/\*codexLinuxHermesDeveloperContextV3\*\//);
   assert.match(patched, /DV\(n\.system_context,IV\(\),!0\)/);
   assert.match(patched, /DV\(n\.user_context,IV\(\),!0\)/);
