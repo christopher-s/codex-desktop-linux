@@ -168,7 +168,7 @@ Renderer lifecycle calls send only structured-clone-safe primitives/plain data. 
 
 This is required for steady-state reliability: runtime QA found that a mutable renderer message object could serialize successfully at `begin_turn` and later fail at `pre_api_request` with `IPC arguments could not be serialized`. The text-only contract removed that second-turn failure; a rebuilt two-turn Winston regression paired `pre_api_request` / `post_api_request` with API call counts `1` and `2` and produced no serialization warning.
 
-Successful completion ordering is also deliberate: the native ChatGPT completion finalizer runs before the renderer sends Hermes `complete_turn`. That ordering makes the final assistant message visible in renderer state before `assistant_message` is normalized and persisted into Hermes history/LCM. Already-patched candidates with the older notify-before-finalize ordering are migrated structurally and idempotently.
+Successful completion ordering is deliberate: the native ChatGPT completion finalizer runs before the renderer sends Hermes `complete_turn`, and already-patched candidates with the older notify-before-finalize ordering are migrated structurally and idempotently. Live E1 also proved that ordering alone does not populate assistant history. `assistant_message` must be read from the conversation's `currentNode` plus `mapping` state; the patch discovers those state atoms structurally from the upstream conversation-state object and migrates older injected notifiers that incorrectly read `projectId` plus `title` state.
 
 ## `tool_call` phase (plain-Chat tool dispatch)
 

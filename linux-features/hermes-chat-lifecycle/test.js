@@ -389,6 +389,7 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
     "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
     "z={logCancellation:()=>ye({result:`canceled`})};",
     "let g='stream',x=(Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
+    "function Lz(e,t){return{currentNode:e(Hx,t),error:e(Kx,t),isDoNotRemember:e(Yx,t),moderationDisclaimersByMessageId:e(Zx,t),mapping:e(Xx,t),projectId:e(Qx,t),status:e(Ex,t),streamRequestId:e(Tx,t),title:e(Nx,t)}}",
     "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;return n}",
   ].join("");
   const patched = applyTwice(patchRendererAsset, source);
@@ -400,6 +401,11 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.match(patched, /codexLinuxHermesMessageText=m=>/);
   assert.match(patched, /user_message:codexLinuxHermesMessageText\(o\)/);
   assert.match(patched, /assistant_message:codexLinuxHermesMessageText\(g\)/);
+  assert.match(
+    patched,
+    /\/\*codexLinuxHermesAssistantState\*\/let a=e\.get\(Hx,u\),h=e\.get\(Xx,u\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
+  );
+  assert.doesNotMatch(patched, /let a=e\.get\(Qx,u\),h=e\.get\(Nx,u\)/);
   assert.doesNotMatch(patched, /user_message:o[,}]/);
   assert.doesNotMatch(patched, /assistant_message:g[,}]/);
   assert.match(patched, /qaFault:q\.qa_fault\?\?null/);
@@ -429,6 +435,7 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
     "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
     "z={logCancellation:()=>ye({result:`canceled`})};",
     "let g='stream',x=(Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
+    "function Lz(e,t){return{currentNode:e(Hx,t),error:e(Kx,t),isDoNotRemember:e(Yx,t),moderationDisclaimersByMessageId:e(Zx,t),mapping:e(Xx,t),projectId:e(Qx,t),status:e(Ex,t),streamRequestId:e(Tx,t),title:e(Nx,t)}}",
     "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;return n}",
   ].join("");
   const current = patchRendererAsset(source);
@@ -444,6 +451,14 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   const unversioned = current.replace(marker, "");
   assert.notEqual(unversioned, current);
   assert.equal(patchRendererAsset(unversioned), current);
+
+  const assistantMarker = "/*codexLinuxHermesAssistantState*/";
+  const legacyAssistantState = current.replace(
+    `${assistantMarker}let a=e.get(Hx,u),h=e.get(Xx,u)??{},g=a==null?null:h[a]?.message??null;`,
+    "let a=e.get(Qx,u),h=e.get(Nx,u)??{},g=a==null?null:h[a]?.message??null;",
+  );
+  assert.notEqual(legacyAssistantState, current);
+  assert.equal(patchRendererAsset(legacyAssistantState), current);
 
   const completionOrder = current.match(
     /([A-Za-z_$][\w$]*)\(t\),codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/,
@@ -469,6 +484,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
     "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
     "z={logCancellation:()=>ye({result:`canceled`})};",
     "let g='stream',x=(Nqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
+    "function Lz2(e,t){return{currentNode:e(H2,t),error:e(K2,t),isDoNotRemember:e(Y2,t),moderationDisclaimersByMessageId:e(Z2,t),mapping:e(X2,t),projectId:e(Q2,t),status:e(E2,t),streamRequestId:e(T2,t),title:e(N2,t)}}",
     "async function i_i(e,t,n){if(e.get(CH,t)||e.get(bJr,t))return;let r=e.get(aB,t),i=e.get(mB,t);if(r==null&&i==null)return n}",
   ].join("");
   const patched = patchRendererAsset(source);
@@ -476,6 +492,10 @@ test("renderer patch follows current upstream minified identifiers structurally"
   assert.match(patched, /async function i_i\(e,t,n\)\{let codexLinuxHermesPendingPreflight=/);
   assert.match(patched, /Nqr\(\{scope:e,conversationId:u,streamRequestId:g\}\),codexLinuxHermesPreflightMap\.delete\(u\)/);
   assert.match(patched, /Gfi\(t\),codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
+  assert.match(
+    patched,
+    /\/\*codexLinuxHermesAssistantState\*\/let a=e\.get\(H2,u\),h=e\.get\(X2,u\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
+  );
 });
 
 test("renderer patch leaves unrelated assets unchanged", () => {
