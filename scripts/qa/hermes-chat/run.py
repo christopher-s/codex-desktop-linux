@@ -439,9 +439,7 @@ async def _e1_two_turns(
                 raise AssertionError(
                     f"E1 turn {logical_turn} unexpectedly executed a tool: {new_tools}"
                 )
-            shell = await chat.state(client)
-            if shell.get("visibleComposerCount") != 1:
-                raise AssertionError(f"E1 turn {logical_turn} did not return to a composable Chat state: {shell}")
+            shell = await chat.wait_for_visible_composer(client, timeout=45)
             run.record(
                 "e1_turn",
                 logical_turn=logical_turn,

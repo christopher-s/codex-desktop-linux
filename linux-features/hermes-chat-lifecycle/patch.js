@@ -15,6 +15,7 @@ const PRELOAD_MARKER = "hermesChatLifecycle";
 const RENDERER_MARKER = "codexLinuxHermesLifecycle";
 const PLAIN_CHAT_RENDERER_MARKER = "codexLinuxHermesPlainChatLifecycle";
 const ASSISTANT_STATE_MARKER = "codexLinuxHermesAssistantState";
+const ASSISTANT_STATE_V2_MARKER = "codexLinuxHermesAssistantStateV2";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
 
 function countOf(source, needle) {
@@ -31,16 +32,41 @@ function discoverConversationStateAtoms(source) {
   };
 }
 
+function discoverConversationAliasResolver(source) {
+  const contract = /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{return \3==null\?null:([A-Za-z_$][\w$]*)\(\3\)\?\2\(([A-Za-z_$][\w$]*),\3\)\?\?\3:([A-Za-z_$][\w$]*)\(\3\)\}/gu;
+  const matches = [...source.matchAll(contract)];
+  if (matches.length !== 1) return null;
+  return matches[0][1];
+}
+
 function upgradeRendererAssistantState(source) {
   const atoms = discoverConversationStateAtoms(source);
   if (atoms == null) {
     throw new Error("Hermes lifecycle renderer conversation state atoms not found uniquely");
   }
-  const currentLookup = `/*${ASSISTANT_STATE_MARKER}*/let a=e.get(${atoms.currentNodeAtom},u),h=e.get(${atoms.mappingAtom},u)??{},g=a==null?null:h[a]?.message??null;`;
-  if (source.includes(currentLookup)) return source;
-  if (source.includes(`/*${ASSISTANT_STATE_MARKER}*/`)) {
-    throw new Error("Hermes lifecycle renderer assistant-state marker exists with stale state atoms");
+  const resolver = discoverConversationAliasResolver(source);
+  if (resolver == null) {
+    throw new Error("Hermes lifecycle renderer conversation alias resolver not found uniquely");
   }
+  const currentLookup = `/*${ASSISTANT_STATE_V2_MARKER}*/let c=${resolver}(e.get,u)??u,a=e.get(${atoms.currentNodeAtom},c),h=e.get(${atoms.mappingAtom},c)??{},g=a==null?null:h[a]?.message??null;`;
+  if (source.includes(currentLookup)) return source;
+  if (source.includes(`/*${ASSISTANT_STATE_V2_MARKER}*/`)) {
+    throw new Error("Hermes lifecycle renderer assistant-state V2 marker exists with stale resolver or state atoms");
+  }
+
+  const v1Lookup = /\/\*codexLinuxHermesAssistantState\*\/let a=e\.get\(([A-Za-z_$][\w$]*),u\),h=e\.get\(([A-Za-z_$][\w$]*),u\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/gu;
+  const v1Matches = [...source.matchAll(v1Lookup)];
+  if (v1Matches.length === 1) {
+    const match = v1Matches[0];
+    return source.slice(0, match.index) + currentLookup + source.slice(match.index + match[0].length);
+  }
+  if (v1Matches.length > 1) {
+    throw new Error(`Hermes lifecycle renderer assistant-state V1 lookup is ambiguous: ${v1Matches.length}`);
+  }
+  if (source.includes(`/*${ASSISTANT_STATE_MARKER}*/`)) {
+    throw new Error("Hermes lifecycle renderer assistant-state V1 marker exists with stale lookup");
+  }
+
   const legacyLookup = /codexLinuxHermesPreflightMap\.delete\(u\);let a=e\.get\(([A-Za-z_$][\w$]*),u\),h=e\.get\(([A-Za-z_$][\w$]*),u\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/gu;
   const matches = [...source.matchAll(legacyLookup)];
   if (matches.length !== 1) {
@@ -242,6 +268,11 @@ function patchRendererAsset(source) {
     console.warn("WARN: ChatGPT conversation state atoms not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
+  const conversationResolver = discoverConversationAliasResolver(source);
+  if (conversationResolver == null) {
+    console.warn("WARN: ChatGPT conversation alias resolver not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
 
   const turnContract = /([A-Za-z_$][\w$]*)=t\.projectId\?\?e\.get\(([A-Za-z_$][\w$]*),u\),([A-Za-z_$][\w$]*)=t\.conversationOrigin===void 0\?e\.get\(([A-Za-z_$][\w$]*),u\):t\.conversationOrigin/u;
   const match = source.match(turnContract);
@@ -261,7 +292,7 @@ function patchRendererAsset(source) {
     `codexLinuxHermesMessageText=m=>typeof m===\`string\`?m:Array.isArray(m?.content?.parts)?m.content.parts.filter(x=>typeof x===\`string\`).join(\`\\n\`):typeof m?.content?.text===\`string\`?m.content.text:\`\`,` +
     `codexLinuxHermesPreflightMap=globalThis.__codexLinuxHermesLifecyclePreflights??=(new Map),` +
     `codexLinuxHermesNotify=(n,i={})=>{if(${RENDERER_MARKER}?.enabled!==!0||codexLinuxHermesTerminalSent)return;codexLinuxHermesTerminalSent=!0,codexLinuxHermesPreflightMap.delete(u);` +
-    `/*${ASSISTANT_STATE_MARKER}*/let a=e.get(${stateAtoms.currentNodeAtom},u),h=e.get(${stateAtoms.mappingAtom},u)??{},g=a==null?null:h[a]?.message??null;` +
+    `/*${ASSISTANT_STATE_V2_MARKER}*/let c=${conversationResolver}(e.get,u)??u,a=e.get(${stateAtoms.currentNodeAtom},c),h=e.get(${stateAtoms.mappingAtom},c)??{},g=a==null?null:h[a]?.message??null;` +
     `globalThis.electronBridge?.hermesChatLifecycle?.({phase:n,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),assistant_message:codexLinuxHermesMessageText(g),model:r,...i}).catch(()=>{})};` +
     `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/` +
     `let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`probe\`,gizmo_id:${projectVar}});if(q?.enabled===!0){` +
