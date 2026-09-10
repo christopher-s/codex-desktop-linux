@@ -283,9 +283,10 @@ The environment-only control accepts three QA-only values:
 CODEX_HERMES_QA_FAULT=model_call_error
 CODEX_HERMES_QA_FAULT=disable_context
 CODEX_HERMES_QA_FAULT=suppress_complete
+CODEX_HERMES_QA_FAULT=begin_only
 ```
 
-`model_call_error` runs `begin_turn` and `pre_api_request`, then routes through Codex's real stream-error callback before a real ChatGPT request is started. `disable_context` keeps the lifecycle active while withholding Hermes system/user context from `extraDeveloperInstructionMessages`. `suppress_complete` keeps `begin_turn`/`pre_api_request` active and lets the native model request finish while suppressing only the renderer's terminal `complete_turn` notification. The latter two modes exist to isolate regular-Chat lifecycle/UI coupling without ad hoc bundle edits. Unsupported values are ignored.
+`model_call_error` runs `begin_turn` and `pre_api_request`, then routes through Codex's real stream-error callback before a real ChatGPT request is started. `disable_context` keeps the lifecycle active while withholding Hermes system/user context from `extraDeveloperInstructionMessages`. `suppress_complete` keeps `begin_turn`/`pre_api_request` active and lets the native model request finish while suppressing only the renderer's terminal `complete_turn` notification. `begin_only` keeps a real lifecycle `probe → begin_turn`, withholds Hermes context, skips `pre_api_request`, and suppresses terminal completion notification so UI coupling can be localized to the earliest lifecycle activation. These modes exist only for deterministic lifecycle QA; unsupported values are ignored.
 
 ## Runtime diagnostics
 

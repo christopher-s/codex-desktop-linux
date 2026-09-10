@@ -17,6 +17,7 @@ const PLAIN_CHAT_RENDERER_MARKER = "codexLinuxHermesPlainChatLifecycle";
 const ASSISTANT_STATE_MARKER = "codexLinuxHermesAssistantState";
 const ASSISTANT_STATE_V2_MARKER = "codexLinuxHermesAssistantStateV2";
 const QA_CONTROL_MARKER = "codexLinuxHermesQaFaultControls";
+const QA_CONTROL_V2_MARKER = "codexLinuxHermesQaFaultControlsV2";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
 
 function countOf(source, needle) {
@@ -134,7 +135,7 @@ async function codexLinuxHermesLifecycleInvoke(e){
   }
   let t=typeof e.gizmo_id===\`string\`?e.gizmo_id:\`\`,n=codexLinuxHermesAllowedGizmos();
   if(t&&!n.has(t))return{ok:!0,enabled:!1,reason:\`gizmo-not-registered\`};
-  if(e.phase===\`probe\`){let q=process.env.CODEX_HERMES_QA_FAULT;return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:[\`model_call_error\`,\`disable_context\`,\`suppress_complete\`].includes(q)?q:null}}
+  if(e.phase===\`probe\`){let q=process.env.CODEX_HERMES_QA_FAULT;return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:[\`model_call_error\`,\`disable_context\`,\`suppress_complete\`,\`begin_only\`].includes(q)?q:null}}
   let r={...e},i=codexLinuxHermesLifecycleKey(r);
   if(r.phase===\`begin_turn\`){
     if(i==null)return{ok:!1,enabled:!1,error:\`missing-conversation-identity\`};
@@ -213,32 +214,59 @@ function patchPreload(extractedDir) {
 }
 
 function upgradeRendererQaFaultControls(source) {
-  if (source.includes(`/*${QA_CONTROL_MARKER}*/`)) return source;
+  if (source.includes(`/*${QA_CONTROL_V2_MARKER}*/`)) return source;
 
-  const contextPattern = /let codexLinuxHermesContextMessages=\[\];typeof n\.system_context===`string`&&n\.system_context\.trim\(\)\.length>0&&codexLinuxHermesContextMessages\.push\(a_i\(n\.system_context,rp\(\),!0\)\);typeof n\.user_context===`string`&&n\.user_context\.trim\(\)\.length>0&&codexLinuxHermesContextMessages\.push\(i_i\(n\.user_context,\[\],\{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0\},\[\],rp\(\)\)\);codexLinuxHermesContextMessages\.length>0&&\(t\.extraDeveloperInstructionMessages=\[\.\.\.t\.extraDeveloperInstructionMessages\?\?\[\],\.\.\.codexLinuxHermesContextMessages\]\)/gu;
-  const contextMatches = [...source.matchAll(contextPattern)];
-  if (contextMatches.length !== 1) {
-    throw new Error(`Hermes lifecycle renderer context-injection anchor is ambiguous: ${contextMatches.length}`);
-  }
-  let upgraded = source.replace(
-    contextPattern,
-    `if(codexLinuxHermesPreflight.qaFault!==\`disable_context\`){/*${QA_CONTROL_MARKER}*/$&}`,
-  );
+  let upgraded = source;
+  if (upgraded.includes(`/*${QA_CONTROL_MARKER}*/`)) {
+    const v1Prefix = `if(codexLinuxHermesPreflight.qaFault!==\`disable_context\`){/*${QA_CONTROL_MARKER}*/`;
+    if (countOf(upgraded, v1Prefix) !== 1) {
+      throw new Error("Hermes lifecycle renderer QA V1 context gate is missing or ambiguous");
+    }
+    upgraded = upgraded.replace(
+      v1Prefix,
+      `if(![\`disable_context\`,\`begin_only\`].includes(codexLinuxHermesPreflight.qaFault)){/*${QA_CONTROL_V2_MARKER}*/`,
+    );
+    const v1Complete = `codexLinuxHermesPreflight?.qaFault===\`suppress_complete\`?void 0:codexLinuxHermesNotify(\`complete_turn\``;
+    if (countOf(upgraded, v1Complete) !== 1) {
+      throw new Error("Hermes lifecycle renderer QA V1 complete gate is missing or ambiguous");
+    }
+    upgraded = upgraded.replace(
+      v1Complete,
+      `[\`suppress_complete\`,\`begin_only\`].includes(codexLinuxHermesPreflight?.qaFault)?void 0:codexLinuxHermesNotify(\`complete_turn\``,
+    );
+  } else {
+    const contextPattern = /let codexLinuxHermesContextMessages=\[\];typeof n\.system_context===`string`&&n\.system_context\.trim\(\)\.length>0&&codexLinuxHermesContextMessages\.push\(a_i\(n\.system_context,rp\(\),!0\)\);typeof n\.user_context===`string`&&n\.user_context\.trim\(\)\.length>0&&codexLinuxHermesContextMessages\.push\(i_i\(n\.user_context,\[\],\{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0\},\[\],rp\(\)\)\);codexLinuxHermesContextMessages\.length>0&&\(t\.extraDeveloperInstructionMessages=\[\.\.\.t\.extraDeveloperInstructionMessages\?\?\[\],\.\.\.codexLinuxHermesContextMessages\]\)/gu;
+    const contextMatches = [...upgraded.matchAll(contextPattern)];
+    if (contextMatches.length !== 1) {
+      throw new Error(`Hermes lifecycle renderer context-injection anchor is ambiguous: ${contextMatches.length}`);
+    }
+    upgraded = upgraded.replace(
+      contextPattern,
+      `if(![\`disable_context\`,\`begin_only\`].includes(codexLinuxHermesPreflight.qaFault)){/*${QA_CONTROL_V2_MARKER}*/$&}`,
+    );
 
-  const completePattern = /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)/gu;
-  const completeMatches = [...upgraded.matchAll(completePattern)];
-  if (completeMatches.length !== 1) {
-    throw new Error(`Hermes lifecycle renderer complete-turn QA anchor is ambiguous: ${completeMatches.length}`);
+    const completePattern = /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)/gu;
+    const completeMatches = [...upgraded.matchAll(completePattern)];
+    if (completeMatches.length !== 1) {
+      throw new Error(`Hermes lifecycle renderer complete-turn QA anchor is ambiguous: ${completeMatches.length}`);
+    }
+    upgraded = upgraded.replace(
+      completePattern,
+      `[\`suppress_complete\`,\`begin_only\`].includes(codexLinuxHermesPreflight?.qaFault)?void 0:$&`,
+    );
   }
-  upgraded = upgraded.replace(
-    completePattern,
-    `codexLinuxHermesPreflight?.qaFault===\`suppress_complete\`?void 0:$&`,
-  );
-  return upgraded;
+
+  const preApiPrefix = `if(${RENDERER_MARKER}?.enabled===!0)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\``;
+  const beginOnlyPrefix = `if(${RENDERER_MARKER}?.enabled===!0&&codexLinuxHermesPreflight?.qaFault!==\`begin_only\`)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\``;
+  if (countOf(upgraded, beginOnlyPrefix) === 1) return upgraded;
+  if (countOf(upgraded, preApiPrefix) !== 1) {
+    throw new Error("Hermes lifecycle renderer pre-api QA gate is missing or ambiguous");
+  }
+  return upgraded.replace(preApiPrefix, beginOnlyPrefix);
 }
 
 function upgradeRendererCompletionOrdering(source) {
-  const oldOrder = /((?:codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`\?void 0:)?codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)/gu;
+  const oldOrder = /((?:(?:codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`|\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\))\?void 0:)?codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)/gu;
   const oldMatches = [...source.matchAll(oldOrder)];
   if (oldMatches.length === 1) {
     const match = oldMatches[0];
@@ -248,7 +276,7 @@ function upgradeRendererCompletionOrdering(source) {
   if (oldMatches.length > 1) {
     throw new Error(`Hermes lifecycle renderer old completion ordering is ambiguous: ${oldMatches.length}`);
   }
-  const currentOrder = /([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),((?:codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`\?void 0:)?codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\))/gu;
+  const currentOrder = /([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),((?:(?:codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`|\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\))\?void 0:)?codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\))/gu;
   const currentMatches = [...source.matchAll(currentOrder)];
   if (currentMatches.length !== 1) {
     throw new Error(`Hermes lifecycle renderer marker exists without one completion ordering anchor: ${currentMatches.length}`);
@@ -325,7 +353,7 @@ function patchRendererAsset(source) {
     `let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`probe\`,gizmo_id:${projectVar}});if(q?.enabled===!0){` +
     `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:q.qa_fault??null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
     `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +
-    `if(n?.enabled===!0){${RENDERER_MARKER}=n;if(codexLinuxHermesPreflight.qaFault!==\`disable_context\`){/*${QA_CONTROL_MARKER}*/let codexLinuxHermesContextMessages=[];` +
+    `if(n?.enabled===!0){${RENDERER_MARKER}=n;if(![\`disable_context\`,\`begin_only\`].includes(codexLinuxHermesPreflight.qaFault)){/*${QA_CONTROL_V2_MARKER}*/let codexLinuxHermesContextMessages=[];` +
     `typeof n.system_context===\`string\`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(a_i(n.system_context,rp(),!0));` +
     `typeof n.user_context===\`string\`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(i_i(n.user_context,[],{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0},[],rp()));` +
     `codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])}}` +
@@ -346,7 +374,7 @@ function patchRendererAsset(source) {
   patched = patched.replace(
     apiStartAnchor,
     `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
-      `if(${RENDERER_MARKER}?.enabled===!0)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\`,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r})}catch(e){console.warn(\`[hermes-chat-lifecycle] pre_api_request failed\`,e)}` +
+      `if(${RENDERER_MARKER}?.enabled===!0&&codexLinuxHermesPreflight?.qaFault!==\`begin_only\`)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\`,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r})}catch(e){console.warn(\`[hermes-chat-lifecycle] pre_api_request failed\`,e)}` +
       `if(codexLinuxHermesPreflight?.qaFault===\`model_call_error\`){xe({error:\`qa-injected-model-call-error\`,errorKind:\`network\`,requestId:s,type:\`fetch-stream-error\`}),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
       `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
       `codexLinuxHermesPreflight&&(codexLinuxHermesPreflight.started=!0);let p=await e.get(${streamAtom}).startCompletionStream(`,
@@ -385,7 +413,7 @@ function patchRendererAsset(source) {
   const success = successMatches[0];
   patched = patched.replace(
     success[0],
-    `${success[1]}=${success[2]}=>{${success[3]}(${success[2]},\`completed\`)&&(${success[4]}(${success[2]}),codexLinuxHermesPreflight?.qaFault===\`suppress_complete\`?void 0:codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:ie}),`,
+    `${success[1]}=${success[2]}=>{${success[3]}(${success[2]},\`completed\`)&&(${success[4]}(${success[2]}),[\`suppress_complete\`,\`begin_only\`].includes(codexLinuxHermesPreflight?.qaFault)?void 0:codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:ie}),`,
   );
 
   const errorAnchor = "xe=n=>{if(!ve(n.requestId,`failed`))return;";

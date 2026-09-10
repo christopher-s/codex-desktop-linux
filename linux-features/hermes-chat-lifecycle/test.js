@@ -81,7 +81,7 @@ test("fresh plain-Chat identity provisions its session before the first tool cal
 });
 
 test("probe exposes only supported lifecycle QA fault modes", async () => {
-  for (const mode of ["model_call_error", "disable_context", "suppress_complete"]) {
+  for (const mode of ["model_call_error", "disable_context", "suppress_complete", "begin_only"]) {
     const { api } = manifestHarness({ CODEX_HERMES_QA_FAULT: mode });
     const probe = JSON.parse(JSON.stringify(await api.invoke({ phase: "probe" })));
     assert.equal(probe.enabled, true);
@@ -339,7 +339,7 @@ test("main patch registers a trusted dedicated lifecycle IPC handler and is idem
   assert.match(patched, /codexLinuxHermesLifecycleInvoke/);
   assert.ok(patched.includes(`ipcMain.handle(\`${IPC_CHANNEL}\``));
   assert.match(patched, /if\(!n\(e\)\)return\{ok:!1,enabled:!1,error:`untrusted-ipc`\}/);
-  assert.match(patched, /\[`model_call_error`,`disable_context`,`suppress_complete`\]\.includes\(q\)\?q:null/);
+  assert.match(patched, /\[`model_call_error`,`disable_context`,`suppress_complete`,`begin_only`\]\.includes\(q\)\?q:null/);
   assert.match(patched, /r\.phase===`close_session`&&a\?\.ok===!0/);
   assert.match(patched, /e\.phase===`conversation_identity`/);
   assert.ok(patched.includes('let k=codexLinuxHermesLifecycleKey({client_conversation_id:cn}),s=codexLinuxHermesLifecycleSessions.get(k)'));
@@ -423,9 +423,10 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.doesNotMatch(patched, /assistant_message:g[,}]/);
   assert.match(patched, /qaFault:q\.qa_fault\?\?null/);
   assert.match(patched, /qaFault===`model_call_error`/);
-  assert.match(patched, /\/\*codexLinuxHermesQaFaultControls\*\//);
-  assert.match(patched, /qaFault!==`disable_context`/);
-  assert.match(patched, /qaFault===`suppress_complete`\?void 0:codexLinuxHermesNotify\(`complete_turn`/);
+  assert.match(patched, /\/\*codexLinuxHermesQaFaultControlsV2\*\//);
+  assert.match(patched, /!\[`disable_context`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\.qaFault\)/);
+  assert.match(patched, /codexLinuxHermesPreflight\?\.qaFault!==`begin_only`\)try\{await globalThis\.electronBridge\?\.hermesChatLifecycle\?\.\(\{phase:`pre_api_request`/);
+  assert.match(patched, /\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`/);
   assert.match(patched, /xe\(\{error:`qa-injected-model-call-error`/);
   assert.match(patched, /qa-injected-model-call-error/);
   assert.match(patched, /__codexLinuxHermesLifecyclePreflights/);
@@ -483,7 +484,7 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   assert.equal(patchRendererAsset(legacyAssistantState), current);
 
   const completionOrder = current.match(
-    /([A-Za-z_$][\w$]*)\(t\),(codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\))/,
+    /([A-Za-z_$][\w$]*)\(t\),(\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\))/,
   );
   assert.ok(completionOrder);
   const oldCompletionOrder = current.replace(
@@ -514,7 +515,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
   assert.notEqual(patched, source);
   assert.match(patched, /async function i_i\(e,t,n\)\{let codexLinuxHermesPendingPreflight=/);
   assert.match(patched, /Nqr\(\{scope:e,conversationId:u,streamRequestId:g\}\),codexLinuxHermesPreflightMap\.delete\(u\)/);
-  assert.match(patched, /Gfi\(t\),codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
+  assert.match(patched, /Gfi\(t\),\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
   assert.match(
     patched,
     /\/\*codexLinuxHermesAssistantStateV2\*\/let c=I2\(e\.get,u\)\?\?u,a=e\.get\(H2,c\),h=e\.get\(X2,c\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
