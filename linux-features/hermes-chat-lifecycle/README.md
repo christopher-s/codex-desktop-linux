@@ -48,7 +48,7 @@ CODEX_HERMES_GIZMO_IDS=g-abc12345,g-def67890
 
 When that override is non-empty, invalid IDs are filtered and the manifest is not used as a fallback. Registration controls only non-empty Custom GPT/Gizmo identities; project-less ordinary Chat does not require a manifest entry.
 
-The renderer performs a fast `probe` through trusted main-process IPC before creating any Hermes preflight state. Project-less ordinary Chat probes are eligible when the feature is enabled. Non-empty Custom GPT/Gizmo IDs still fail closed unless registered, and unrelated webviews keep their normal behavior.
+The renderer does not perform a standalone lifecycle `probe` on the foreground Chat submission path. Eligibility is resolved by `begin_turn` in the trusted main process. Project-less ordinary Chat is eligible when the feature is enabled. Non-empty Custom GPT/Gizmo IDs still fail closed unless registered, and unrelated webviews keep their normal behavior. The `probe` phase remains available for diagnostics and QA controls.
 
 ## What the feature currently does
 
@@ -56,7 +56,7 @@ The feature patches three Codex layers:
 
 - **Electron preload** — exposes `electronBridge.hermesChatLifecycle(request)`;
 - **Electron main process** — validates trusted IPC senders, allows project-less ordinary Chat directly, enforces manifest/env registration for non-empty Gizmo IDs, binds canonical conversations to lifecycle sessions, and hosts a persistent Hermes helper process;
-- **ChatGPT webview turn orchestrator** — runs Hermes lifecycle before the observable ChatGPT request, injects the provider system block at system authority and recalled/plugin context at hidden user authority, and reports success/error/interruption terminal states.
+- **ChatGPT webview turn orchestrator** — lets ChatGPT build and commit its native request state, runs Hermes lifecycle at the late pre-transport boundary, appends Hermes context as hidden one-turn developer messages on the prepared request, and reports success/error/interruption terminal states.
 
 The persistent Python helper imports the locally installed Hermes Agent runtime directly. It does not contact or modify the `hermes-chatgpt` bridge.
 
@@ -65,15 +65,14 @@ The persistent Python helper imports the locally installed Hermes Agent runtime 
 Successful turn:
 
 ```text
-Chat/Gizmo probe
-  -> session open/reuse
+ChatGPT builds prepared request + commits native request/composer state
+  -> Hermes begin_turn (eligibility + session open/reuse)
   -> Hindsight MemoryManager.on_turn_start
   -> Hindsight provider system prompt + prefetch
   -> native pre_llm_call hooks
      -> Superpowers
      -> LCM/plugin hooks
-  -> hidden one-turn system message (provider prompt only)
-  -> hidden one-turn contextual user message (fenced recall + plugin context)
+  -> append hidden one-turn developer messages to prepared request
   -> native pre_api_request
   -> ChatGPT startCompletionStream
   -> native post_api_request
@@ -222,17 +221,13 @@ no separate HTTP endpoint and no `hermes-chatgpt` bridge.
 
 ## Hidden context injection
 
-Hermes uses two different authority channels, and Codex now mirrors that split.
+Hermes returns separate provider/system context and recalled/plugin context at `begin_turn`. The renderer preserves that split as two hidden one-turn **developer** messages using ChatGPT's native developer-message constructor, then appends them directly to the prepared request's `messages` list at the late pre-transport boundary.
 
-The external memory provider's `MemoryManager.build_system_prompt()` output is injected as a visually hidden one-turn **system** message. Recalled memory and installed plugin `pre_llm_call` output are injected as a separate visually hidden, one-turn **user** message marked as contextual-retry content. The memory portion uses Hermes's native `build_memory_context_block()` fence before plugin context is appended.
-
-This matches Hermes proper's API semantics: provider instructions remain system-level, while recalled memory and plugin context are appended to the user API content rather than promoted to system authority.
-
-The canonical visible user message is never rewritten. The contextual user message is visually hidden, excluded after the next user message, and does not become the local visible prompt.
+The canonical visible user message is never rewritten. Both hidden messages are scoped to the prepared request and expire after the current turn rather than becoming visible conversation turns.
 
 ## Cancellation safety
 
-Hermes recall/plugin work can take several seconds before ChatGPT receives the foreground request. Runtime QA exposed a race where a user could press Stop during this pre-stream interval and the request would later start anyway.
+Hermes recall/plugin work can take several seconds after ChatGPT has committed native request state and before transport starts. Runtime QA exposed a race where a user could press Stop during this late pre-stream interval and the request would later start anyway.
 
 The feature now keeps a registration-scoped preflight cancellation registry and integrates with Codex's existing Stop handler. Cancellation is checked:
 
@@ -289,7 +284,7 @@ CODEX_HERMES_QA_FAULT=begin_only
 CODEX_HERMES_QA_FAULT=identity_only
 ```
 
-`model_call_error` runs `begin_turn` and `pre_api_request`, then routes through Codex's real stream-error callback before a real ChatGPT request is started. `disable_context` keeps the lifecycle active while withholding Hermes system/user context from `extraDeveloperInstructionMessages`. `suppress_complete` keeps `begin_turn`/`pre_api_request` active and lets the native model request finish while suppressing only the renderer's terminal `complete_turn` notification. `begin_only` keeps a real lifecycle `probe → begin_turn`, withholds Hermes context, skips `pre_api_request`, and suppresses terminal completion notification so UI coupling can be localized to the earliest lifecycle activation. With `begin_only`, the auxiliary `CODEX_HERMES_QA_FAST_BEGIN=1` control allocates the normal main-process session and returns an enabled empty-context begin response immediately, without launching the Hermes helper; this isolates renderer lifecycle activation from helper latency/side effects. `identity_only` makes the lifecycle probe report disabled while leaving the independent server-ID `conversation_identity` observer active, which isolates identity/session provisioning from renderer begin activation. With `identity_only`, `CODEX_HERMES_QA_FAST_IDENTITY=1` allocates the normal main-process conversation session and immediately returns a successful identity response without launching the helper; this separates successful IPC/session mapping from helper/session-open side effects. Helper-side session provisioning can be split further with `CODEX_HERMES_QA_SESSION_INIT=no_memory`, `no_context`, `no_hooks`, or `minimal`; `minimal` still imports Hermes and creates/logs the lifecycle runtime while skipping Hindsight initialization, context-engine session start, and session-start hooks. These modes exist only for deterministic lifecycle QA; unsupported values are ignored.
+`model_call_error` runs late `begin_turn` and `pre_api_request`, then routes through Codex's real stream-error callback before transport starts. `disable_context` keeps the lifecycle active while withholding Hermes system/user context from the prepared request. `suppress_complete` keeps `begin_turn`/`pre_api_request` active and lets the native model request finish while suppressing only the renderer's terminal `complete_turn` notification. `begin_only` performs the late `begin_turn`, withholds Hermes context, skips `pre_api_request`, and suppresses terminal completion notification so QA can isolate the earliest lifecycle activation after native request-state commit. With `begin_only`, `CODEX_HERMES_QA_FAST_BEGIN=1` allocates the normal main-process session and returns an enabled empty-context begin response immediately, without launching the Hermes helper. `identity_only` makes `begin_turn` return disabled while leaving the independent server-ID `conversation_identity` observer active, which isolates identity/session provisioning from foreground lifecycle activation. `CODEX_HERMES_QA_FAST_IDENTITY=1` still short-circuits that identity observer's helper work for diagnostics. Helper-side session provisioning can be split further with `CODEX_HERMES_QA_SESSION_INIT=no_memory`, `no_context`, `no_hooks`, or `minimal`; `minimal` still imports Hermes and creates/logs the lifecycle runtime while skipping Hindsight initialization, context-engine session start, and session-start hooks. The separate `probe` phase remains available for diagnostics, but foreground Chat submission does not await it. These modes exist only for deterministic lifecycle QA; unsupported values are ignored.
 
 ## Runtime diagnostics
 
@@ -335,7 +330,7 @@ node --test linux-features/hermes-chat-lifecycle/test.js
 Current status at 2026-09-06:
 
 ```text
-12 / 12 passing
+26 / 26 passing
 ```
 
 The test suite covers:
@@ -345,7 +340,7 @@ The test suite covers:
 - preload bridge exposure;
 - exact Gizmo probe path;
 - renderer `begin_turn` / `pre_api_request` injection;
-- split hidden context construction: provider system message plus contextual user message;
+- structurally discovered hidden developer-message construction appended to the prepared request;
 - terminal success/error/cancel hooks;
 - pre-stream cancellation registry;
 - patch idempotency;
