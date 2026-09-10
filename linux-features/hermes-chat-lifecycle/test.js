@@ -454,8 +454,14 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
     "let g='stream',x=(Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
     "function Az(e,t){return t==null?null:ML(t)?e(AJ,t)??t:PL(t)}",
     "function Lz(e,t){return{currentNode:e(Hx,t),error:e(Kx,t),isDoNotRemember:e(Yx,t),moderationDisclaimersByMessageId:e(Zx,t),mapping:e(Xx,t),projectId:e(Qx,t),status:e(Ex,t),streamRequestId:e(Tx,t),title:e(Nx,t)}}",
+    "function Fz({extraDeveloperInstructions:a=[],oneTurnDeveloperInstructions:b=[]}){return{extraDeveloperInstructionMessages:[...a.map(x=>Mk(x,Nk())),...b.map(y=>Mk(y,Nk(),!0))]}}",
     "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;return n}",
   ].join("");
+  const developerContract = "function Fz({extraDeveloperInstructions:a=[],oneTurnDeveloperInstructions:b=[]}){return{extraDeveloperInstructionMessages:[...a.map(x=>Mk(x,Nk())),...b.map(y=>Mk(y,Nk(),!0))]}}";
+  const missingDeveloperContract = source.replace(developerContract, "");
+  assert.equal(patchRendererAsset(missingDeveloperContract), missingDeveloperContract);
+  const ambiguousDeveloperContract = source + "function Gz({extraDeveloperInstructions:a=[],oneTurnDeveloperInstructions:b=[]}){return{extraDeveloperInstructionMessages:[...a.map(x=>QV(x,RV())),...b.map(y=>QV(y,RV(),!0))]}}";
+  assert.equal(patchRendererAsset(ambiguousDeveloperContract), ambiguousDeveloperContract);
   const patched = applyTwice(patchRendererAsset, source);
   assert.match(patched, /phase:`probe`/);
   assert.match(patched, /phase:`begin_turn`/);
@@ -485,10 +491,11 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.match(patched, /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
   assert.match(patched, /codexLinuxHermesNotify\(`model_call_error`/);
   assert.match(patched, /codexLinuxHermesNotify\(`abort_turn`\)/);
-  assert.match(patched, /a_i\(n\.system_context,rp\(\),!0\)/);
-  assert.match(patched, /i_i\(n\.user_context,\[\],\{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0\},\[\],rp\(\)\)/);
-  assert.doesNotMatch(patched, /a_i\(n\.context/);
-  assert.doesNotMatch(patched, /a_i\(n\.user_context/);
+  assert.match(patched, /\/\*codexLinuxHermesDeveloperContextV2\*\//);
+  assert.match(patched, /Mk\(n\.system_context,Nk\(\),!0\)/);
+  assert.match(patched, /Mk\(n\.user_context,Nk\(\),!0\)/);
+  assert.doesNotMatch(patched, /a_i\(n\.system_context/);
+  assert.doesNotMatch(patched, /i_i\(n\.user_context/);
   new vm.Script(patched);
 });
 
@@ -505,6 +512,7 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
     "let g='stream',x=(Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
     "function Az(e,t){return t==null?null:ML(t)?e(AJ,t)??t:PL(t)}",
     "function Lz(e,t){return{currentNode:e(Hx,t),error:e(Kx,t),isDoNotRemember:e(Yx,t),moderationDisclaimersByMessageId:e(Zx,t),mapping:e(Xx,t),projectId:e(Qx,t),status:e(Ex,t),streamRequestId:e(Tx,t),title:e(Nx,t)}}",
+    "function Fz({extraDeveloperInstructions:a=[],oneTurnDeveloperInstructions:b=[]}){return{extraDeveloperInstructionMessages:[...a.map(x=>Mk(x,Nk())),...b.map(y=>Mk(y,Nk(),!0))]}}",
     "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;return n}",
   ].join("");
   const current = patchRendererAsset(source);
@@ -520,6 +528,12 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   const unversioned = current.replace(marker, "");
   assert.notEqual(unversioned, current);
   assert.equal(patchRendererAsset(unversioned), current);
+
+  const developerContextV2 = "/*codexLinuxHermesDeveloperContextV2*/let codexLinuxHermesContextMessages=[];typeof n.system_context===`string`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(Mk(n.system_context,Nk(),!0));typeof n.user_context===`string`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(Mk(n.user_context,Nk(),!0));codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])";
+  const legacyDeveloperContext = "let codexLinuxHermesContextMessages=[];typeof n.system_context===`string`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(a_i(n.system_context,rp(),!0));typeof n.user_context===`string`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(i_i(n.user_context,[],{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0},[],rp()));codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])";
+  const legacyDeveloperState = current.replace(developerContextV2, legacyDeveloperContext);
+  assert.notEqual(legacyDeveloperState, current);
+  assert.equal(patchRendererAsset(legacyDeveloperState), current);
 
   const assistantV2 = "/*codexLinuxHermesAssistantStateV2*/let c=Az(e.get,u)??u,a=e.get(Hx,c),h=e.get(Xx,c)??{},g=a==null?null:h[a]?.message??null;";
   const assistantV1 = "/*codexLinuxHermesAssistantState*/let a=e.get(Hx,u),h=e.get(Xx,u)??{},g=a==null?null:h[a]?.message??null;";
@@ -560,6 +574,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
     "let g='stream',x=(Nqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
     "function I2(e,t){return t==null?null:M2(t)?e(A2,t)??t:P2(t)}",
     "function Lz2(e,t){return{currentNode:e(H2,t),error:e(K2,t),isDoNotRemember:e(Y2,t),moderationDisclaimersByMessageId:e(Z2,t),mapping:e(X2,t),projectId:e(Q2,t),status:e(E2,t),streamRequestId:e(T2,t),title:e(N2,t)}}",
+    "function D2({extraDeveloperInstructions:a=[],oneTurnDeveloperInstructions:b=[]}){return{extraDeveloperInstructionMessages:[...a.map(x=>DV(x,IV())),...b.map(y=>DV(y,IV(),!0))]}}",
     "async function i_i(e,t,n){if(e.get(CH,t)||e.get(bJr,t))return;let r=e.get(aB,t),i=e.get(mB,t);if(r==null&&i==null)return n}",
   ].join("");
   const patched = patchRendererAsset(source);
@@ -571,6 +586,10 @@ test("renderer patch follows current upstream minified identifiers structurally"
     patched,
     /\/\*codexLinuxHermesAssistantStateV2\*\/let c=I2\(e\.get,u\)\?\?u,a=e\.get\(H2,c\),h=e\.get\(X2,c\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
   );
+  assert.match(patched, /DV\(n\.system_context,IV\(\),!0\)/);
+  assert.match(patched, /DV\(n\.user_context,IV\(\),!0\)/);
+  assert.doesNotMatch(patched, /a_i\(n\.system_context/);
+  assert.doesNotMatch(patched, /i_i\(n\.user_context/);
 });
 
 test("renderer patch leaves unrelated assets unchanged", () => {

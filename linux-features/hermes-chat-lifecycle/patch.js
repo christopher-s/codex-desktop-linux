@@ -18,6 +18,7 @@ const ASSISTANT_STATE_MARKER = "codexLinuxHermesAssistantState";
 const ASSISTANT_STATE_V2_MARKER = "codexLinuxHermesAssistantStateV2";
 const QA_CONTROL_MARKER = "codexLinuxHermesQaFaultControls";
 const QA_CONTROL_V2_MARKER = "codexLinuxHermesQaFaultControlsV2";
+const DEVELOPER_CONTEXT_V2_MARKER = "codexLinuxHermesDeveloperContextV2";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
 
 function countOf(source, needle) {
@@ -39,6 +40,47 @@ function discoverConversationAliasResolver(source) {
   const matches = [...source.matchAll(contract)];
   if (matches.length !== 1) return null;
   return matches[0][1];
+}
+
+function discoverDeveloperInstructionMessageBuilder(source) {
+  const contract = /extraDeveloperInstructionMessages:\[\.\.\.([A-Za-z_$][\w$]*)\.map\(([A-Za-z_$][\w$]*)=>([A-Za-z_$][\w$]*)\(\2,([A-Za-z_$][\w$]*)\(\)\)\),\.\.\.([A-Za-z_$][\w$]*)\.map\(([A-Za-z_$][\w$]*)=>\3\(\6,\4\(\),!0\)\)\]/gu;
+  const matches = [...source.matchAll(contract)];
+  if (matches.length === 0) return null;
+  const pairs = new Map();
+  for (const match of matches) {
+    pairs.set(`${match[3]}\0${match[4]}`, {
+      messageBuilder: match[3],
+      idFactory: match[4],
+    });
+  }
+  if (pairs.size !== 1) return null;
+  return [...pairs.values()][0];
+}
+
+function developerContextPayload(contract) {
+  return `/*${DEVELOPER_CONTEXT_V2_MARKER}*/let codexLinuxHermesContextMessages=[];` +
+    `typeof n.system_context===\`string\`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(${contract.messageBuilder}(n.system_context,${contract.idFactory}(),!0));` +
+    `typeof n.user_context===\`string\`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(${contract.messageBuilder}(n.user_context,${contract.idFactory}(),!0));` +
+    `codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])`;
+}
+
+function upgradeRendererDeveloperContext(source) {
+  const contract = discoverDeveloperInstructionMessageBuilder(source);
+  if (contract == null) {
+    throw new Error("Hermes lifecycle renderer developer-message constructor not found uniquely");
+  }
+  const desired = developerContextPayload(contract);
+  if (source.includes(desired)) return source;
+  if (source.includes(`/*${DEVELOPER_CONTEXT_V2_MARKER}*/`)) {
+    throw new Error("Hermes lifecycle renderer developer-context V2 marker exists with stale constructor identifiers");
+  }
+  const legacy = /let codexLinuxHermesContextMessages=\[\];typeof n\.system_context===`string`&&n\.system_context\.trim\(\)\.length>0&&codexLinuxHermesContextMessages\.push\(([A-Za-z_$][\w$]*)\(n\.system_context,([A-Za-z_$][\w$]*)\(\),!0\)\);typeof n\.user_context===`string`&&n\.user_context\.trim\(\)\.length>0&&codexLinuxHermesContextMessages\.push\(([A-Za-z_$][\w$]*)\(n\.user_context,\[\],\{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0\},\[\],([A-Za-z_$][\w$]*)\(\)\)\);codexLinuxHermesContextMessages\.length>0&&\(t\.extraDeveloperInstructionMessages=\[\.\.\.t\.extraDeveloperInstructionMessages\?\?\[\],\.\.\.codexLinuxHermesContextMessages\]\)/gu;
+  const matches = [...source.matchAll(legacy)];
+  if (matches.length !== 1) {
+    throw new Error(`Hermes lifecycle renderer legacy developer-context payload is ambiguous: ${matches.length}`);
+  }
+  const match = matches[0];
+  return source.slice(0, match.index) + desired + source.slice(match.index + match[0].length);
 }
 
 function upgradeRendererAssistantState(source) {
@@ -314,7 +356,8 @@ function upgradeRendererPlainChatLifecycle(source) {
   }
   upgraded = upgradeRendererCompletionOrdering(upgraded);
   upgraded = upgradeRendererAssistantState(upgraded);
-  return upgradeRendererQaFaultControls(upgraded);
+  upgraded = upgradeRendererQaFaultControls(upgraded);
+  return upgradeRendererDeveloperContext(upgraded);
 }
 
 function patchRendererAsset(source) {
@@ -328,6 +371,11 @@ function patchRendererAsset(source) {
   const conversationResolver = discoverConversationAliasResolver(source);
   if (conversationResolver == null) {
     console.warn("WARN: ChatGPT conversation alias resolver not found uniquely - skipping Hermes lifecycle renderer patch");
+    return source;
+  }
+  const developerMessageContract = discoverDeveloperInstructionMessageBuilder(source);
+  if (developerMessageContract == null) {
+    console.warn("WARN: ChatGPT developer-message constructor not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
 
@@ -355,10 +403,7 @@ function patchRendererAsset(source) {
     `let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`probe\`,gizmo_id:${projectVar}});if(q?.enabled===!0){` +
     `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:q.qa_fault??null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
     `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +
-    `if(n?.enabled===!0){${RENDERER_MARKER}=n;if(![\`disable_context\`,\`begin_only\`].includes(codexLinuxHermesPreflight.qaFault)){/*${QA_CONTROL_V2_MARKER}*/let codexLinuxHermesContextMessages=[];` +
-    `typeof n.system_context===\`string\`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(a_i(n.system_context,rp(),!0));` +
-    `typeof n.user_context===\`string\`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(i_i(n.user_context,[],{is_visually_hidden_from_conversation:!0,is_contextual_retry_user_message:!0,exclude_after_next_user_message:!0},[],rp()));` +
-    `codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])}}` +
+    `if(n?.enabled===!0){${RENDERER_MARKER}=n;if(![\`disable_context\`,\`begin_only\`].includes(codexLinuxHermesPreflight.qaFault)){/*${QA_CONTROL_V2_MARKER}*/${developerContextPayload(developerMessageContract)}}}` +
     `if(codexLinuxHermesPreflight.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}}}` +
     `catch(e){codexLinuxHermesPreflightMap.delete(u),console.warn(\`[hermes-chat-lifecycle] begin_turn failed\`,e)}` +
     `let ${originVar}=t.conversationOrigin===void 0?e.get(${originAtom},u):t.conversationOrigin`;
