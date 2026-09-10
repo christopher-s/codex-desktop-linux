@@ -13,6 +13,7 @@ const IPC_CHANNEL = "codex_desktop:hermes-chat-lifecycle";
 const MAIN_MARKER = "codexLinuxHermesLifecycleInvoke";
 const PRELOAD_MARKER = "hermesChatLifecycle";
 const RENDERER_MARKER = "codexLinuxHermesLifecycle";
+const PLAIN_CHAT_RENDERER_MARKER = "codexLinuxHermesPlainChatLifecycle";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
 
 function countOf(source, needle) {
@@ -95,8 +96,23 @@ async function codexLinuxHermesLifecycleInvoke(e){
 `;
 }
 
+function upgradeInjectedMainRuntime(source) {
+  const marker = `/*${MAIN_MARKER}*/`;
+  if (countOf(source, marker) !== 1) return source;
+  const startNeedle = "const codexLinuxHermesLifecycleSessions=new Map;";
+  const start = source.indexOf(startNeedle);
+  const end = source.indexOf(marker, start);
+  if (start < 0 || end < 0 || source.indexOf(startNeedle, start + startNeedle.length) >= 0) {
+    throw new Error("Hermes lifecycle main runtime marker exists without one owned runtime block");
+  }
+  const desired = mainRuntimeSource().trim();
+  const current = source.slice(start, end + marker.length);
+  if (current === desired) return source;
+  return source.slice(0, start) + desired + source.slice(end + marker.length);
+}
+
 function patchMainBundle(source) {
-  if (countOf(source, `/*${MAIN_MARKER}*/`) === 1) return source;
+  if (countOf(source, `/*${MAIN_MARKER}*/`) === 1) return upgradeInjectedMainRuntime(source);
   const contract = /function ([A-Za-z_$][\w$]*)\(\{buildFlavor:([A-Za-z_$][\w$]*),getContextForWebContents:([A-Za-z_$][\w$]*),isTrustedIpcEvent:([A-Za-z_$][\w$]*)\}\)\{([A-Za-z_$][\w$]*)\.ipcMain\.on/u;
   const matches = [...source.matchAll(new RegExp(contract.source, "gu"))];
   if (matches.length !== 1) {
@@ -138,8 +154,33 @@ function patchPreload(extractedDir) {
   return { matched: 1, changed: 1, reason: null, target: path.relative(extractedDir, preloadPath) };
 }
 
+function upgradeRendererPlainChatLifecycle(source) {
+  if (!source.includes(`let ${RENDERER_MARKER}=null`)) return source;
+  if (source.includes(`/*${PLAIN_CHAT_RENDERER_MARKER}*/`)) return source;
+  const probeLookahead = "let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:`probe`";
+  const legacyGate = /if\(o\?\.author\.role===`user`&&typeof ([A-Za-z_$][\w$]*)===`string`&&\1\.length>0\)try\{/gu;
+  const legacyMatches = [...source.matchAll(legacyGate)].filter((match) => source.startsWith(probeLookahead, match.index + match[0].length));
+  if (legacyMatches.length === 1) {
+    const match = legacyMatches[0];
+    return source.slice(0, match.index) + `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/` + source.slice(match.index + match[0].length);
+  }
+  if (legacyMatches.length > 1) {
+    throw new Error(`Hermes lifecycle renderer legacy plain-Chat gate is ambiguous: ${legacyMatches.length}`);
+  }
+  const currentGate = "if(o?.author.role===`user`)try{";
+  const currentMatches = [];
+  for (let at = source.indexOf(currentGate); at >= 0; at = source.indexOf(currentGate, at + currentGate.length)) {
+    if (source.startsWith(probeLookahead, at + currentGate.length)) currentMatches.push(at);
+  }
+  if (currentMatches.length !== 1) {
+    throw new Error(`Hermes lifecycle renderer marker exists without one plain-Chat gate: ${currentMatches.length}`);
+  }
+  const at = currentMatches[0];
+  return source.slice(0, at) + `${currentGate}/*${PLAIN_CHAT_RENDERER_MARKER}*/` + source.slice(at + currentGate.length);
+}
+
 function patchRendererAsset(source) {
-  if (source.includes(`let ${RENDERER_MARKER}=null`)) return source;
+  if (source.includes(`let ${RENDERER_MARKER}=null`)) return upgradeRendererPlainChatLifecycle(source);
 
   const turnContract = /([A-Za-z_$][\w$]*)=t\.projectId\?\?e\.get\(([A-Za-z_$][\w$]*),u\),([A-Za-z_$][\w$]*)=t\.conversationOrigin===void 0\?e\.get\(([A-Za-z_$][\w$]*),u\):t\.conversationOrigin/u;
   const match = source.match(turnContract);
@@ -161,7 +202,7 @@ function patchRendererAsset(source) {
     `codexLinuxHermesNotify=(n,i={})=>{if(${RENDERER_MARKER}?.enabled!==!0||codexLinuxHermesTerminalSent)return;codexLinuxHermesTerminalSent=!0,codexLinuxHermesPreflightMap.delete(u);` +
     `let a=e.get(Qz,u),h=e.get(nB,u)??{},g=a==null?null:h[a]?.message??null;` +
     `globalThis.electronBridge?.hermesChatLifecycle?.({phase:n,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),assistant_message:codexLinuxHermesMessageText(g),model:r,...i}).catch(()=>{})};` +
-    `if(o?.author.role===\`user\`)try{` +
+    `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/` +
     `let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`probe\`,gizmo_id:${projectVar}});if(q?.enabled===!0){` +
     `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:q.qa_fault??null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
     `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +

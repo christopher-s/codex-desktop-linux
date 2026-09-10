@@ -336,6 +336,26 @@ test("main patch registers a trusted dedicated lifecycle IPC handler and is idem
   new vm.Script(patched);
 });
 
+test("main patch upgrades an already-patched owned runtime block to the current plain-Chat runtime", () => {
+  const source = [
+    "let l={ipcMain:{on(){},handle(){}}},r={at:'a'};",
+    "function hFe({buildFlavor:e,getContextForWebContents:t,isTrustedIpcEvent:n}){",
+    "l.ipcMain.on(r.at,e=>{if(!n(e))return})}",
+  ].join("");
+  const current = patchMainBundle(source);
+  const currentGate = "if(t&&!n.has(t))return{ok:!0,enabled:!1,reason:`gizmo-not-registered`};";
+  const legacyGate = "if(!t||!n.has(t))return{ok:!0,enabled:!1,reason:`gizmo-not-registered`};";
+  assert.ok(current.includes(currentGate));
+  const legacy = current.replace(currentGate, legacyGate);
+  assert.notEqual(legacy, current);
+  assert.equal(patchMainBundle(legacy), current);
+  assert.equal(patchMainBundle(current), current);
+  assert.throws(
+    () => patchMainBundle(`prefix/*codexLinuxHermesLifecycleInvoke*/suffix`),
+    /main runtime marker exists without one owned runtime block/,
+  );
+});
+
 test("preload patch exposes hermesChatLifecycle on electronBridge and is idempotent", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-preload-"));
   try {
@@ -396,6 +416,35 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.doesNotMatch(patched, /a_i\(n\.context/);
   assert.doesNotMatch(patched, /a_i\(n\.user_context/);
   new vm.Script(patched);
+});
+
+test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle patches", () => {
+  const source = [
+    "'oneTurnDeveloperInstructions conversation_mode startCompletionStream';",
+    "async function Xgi(e,t){",
+    "let u='client',d=null,o={author:{role:`user`},content:{content_type:`text`,parts:[`hi`]}},s='turn',r='model';",
+    "let f=0,p0=0,m=t.projectId??e.get(rB,u),h=t.conversationOrigin===void 0?e.get(tB,u):t.conversationOrigin;",
+    "let p=await e.get(yR).startCompletionStream();",
+    "let be=t=>{ve(t,`completed`)&&(Vfi(t),done())},",
+    "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
+    "z={logCancellation:()=>ye({result:`canceled`})};",
+    "let g='stream',x=(Lqr({scope:e,conversationId:u,streamRequestId:g}),{conversationId:u,serverConversationId:d,streamRequestId:g});return h}",
+    "async function e_i(e,t,n){if(e.get(CH,t)||e.get(wJr,t))return;return n}",
+  ].join("");
+  const current = patchRendererAsset(source);
+  const marker = "/*codexLinuxHermesPlainChatLifecycle*/";
+  const currentGate = `if(o?.author.role===\`user\`)try{${marker}`;
+  const legacyGate = "if(o?.author.role===`user`&&typeof m===`string`&&m.length>0)try{";
+  assert.ok(current.includes(currentGate));
+
+  const legacy = current.replace(currentGate, legacyGate);
+  assert.notEqual(legacy, current);
+  assert.equal(patchRendererAsset(legacy), current);
+
+  const unversioned = current.replace(marker, "");
+  assert.notEqual(unversioned, current);
+  assert.equal(patchRendererAsset(unversioned), current);
+  assert.equal(patchRendererAsset(current), current);
 });
 
 test("renderer patch follows current upstream minified identifiers structurally", () => {
