@@ -142,6 +142,7 @@ async function codexLinuxHermesLifecycleInvoke(e){
     let e=codexLinuxHermesLifecycleSessions.get(i);
     e??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
     r.session_id=e.sessionId,r.is_first_turn=e.turnCount===0,e.turnCount+=1,codexLinuxHermesLifecycleSessions.set(i,e);
+    if(process.env.CODEX_HERMES_QA_FAULT===\`begin_only\`&&process.env.CODEX_HERMES_QA_FAST_BEGIN===\`1\`)return{ok:!0,enabled:!0,phase:\`begin_turn\`,session_id:r.session_id,system_context:\`\`,user_context:\`\`,qa_fast_begin:!0};
   }else if(typeof r.session_id!==\`string\`||r.session_id.length===0){
     let e=i==null?null:codexLinuxHermesLifecycleSessions.get(i);
     if(e==null)return{ok:!1,enabled:!1,error:\`unknown-session\`};

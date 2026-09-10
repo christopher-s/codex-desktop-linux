@@ -92,6 +92,28 @@ test("probe exposes only supported lifecycle QA fault modes", async () => {
   assert.equal(probe.qa_fault, null);
 });
 
+test("begin_only fast-begin QA control returns an enabled session without helper work", async () => {
+  const { api } = manifestHarness({
+    CODEX_HERMES_QA_FAULT: "begin_only",
+    CODEX_HERMES_QA_FAST_BEGIN: "1",
+  });
+  const localId = "local-chatgpt:44444444-4444-4444-8444-444444444444";
+  const begin = JSON.parse(JSON.stringify(await api.invoke({
+    phase: "begin_turn",
+    client_conversation_id: localId,
+    conversation_id: localId,
+    turn_id: "turn-fast-begin",
+    user_message: "hello",
+  })));
+  assert.equal(begin.ok, true);
+  assert.equal(begin.enabled, true);
+  assert.equal(begin.phase, "begin_turn");
+  assert.equal(begin.qa_fast_begin, true);
+  assert.equal(begin.system_context, "");
+  assert.equal(begin.user_context, "");
+  assert.match(begin.session_id, /^hs_codex_[0-9a-f]{32}$/);
+});
+
 test("project-less plain Chat lifecycle reuses one canonical session across model and tool phases", async () => {
   const { api } = manifestHarness();
   api.stubHost();
