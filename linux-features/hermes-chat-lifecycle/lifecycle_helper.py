@@ -297,6 +297,11 @@ def _env_enabled(name: str, *, default: bool = True) -> bool:
     return raw.strip().lower() not in {"0", "false", "off", "no"}
 
 
+def _qa_session_init_mode() -> str:
+    mode = str(os.environ.get("CODEX_HERMES_QA_SESSION_INIT") or "").strip().lower()
+    return mode if mode in {"no_memory", "no_context", "no_hooks", "minimal"} else ""
+
+
 def _skill_review_interval() -> int:
     try:
         h = _load_hermes()
@@ -678,39 +683,45 @@ def _session(session_id: str, payload: Optional[dict[str, Any]] = None) -> Sessi
     server_conversation_id = _server_conversation_id(payload)
     model = str(payload.get("model") or "chatgpt")
     h = _load_hermes()
-    manager, provider_name = _create_memory_manager(session_id)
+    qa_session_init = _qa_session_init_mode()
+    if qa_session_init in {"no_memory", "minimal"}:
+        manager, provider_name = None, ""
+    else:
+        manager, provider_name = _create_memory_manager(session_id)
 
     context_engine = None
     context_engine_name = ""
     context_engine_error = ""
-    try:
-        context_engine = h["get_plugin_context_engine"]()
-        context_engine_name = str(getattr(context_engine, "name", "") or "") if context_engine is not None else ""
-        if context_engine is not None:
-            context_engine.on_session_start(
-                session_id,
-                platform="chatgpt-codex",
-                conversation_id=conversation_id or session_id,
-                hermes_home=str(h["get_hermes_home"]()),
-                model=model,
-            )
-    except Exception as exc:
-        context_engine_error = f"{type(exc).__name__}: {exc}"
-        context_engine = None
+    if qa_session_init not in {"no_context", "minimal"}:
+        try:
+            context_engine = h["get_plugin_context_engine"]()
+            context_engine_name = str(getattr(context_engine, "name", "") or "") if context_engine is not None else ""
+            if context_engine is not None:
+                context_engine.on_session_start(
+                    session_id,
+                    platform="chatgpt-codex",
+                    conversation_id=conversation_id or session_id,
+                    hermes_home=str(h["get_hermes_home"]()),
+                    model=model,
+                )
+        except Exception as exc:
+            context_engine_error = f"{type(exc).__name__}: {exc}"
+            context_engine = None
 
     session_start_hook_count = 0
     session_start_hook_error = ""
-    try:
-        results = h["invoke_hook"](
-            "on_session_start",
-            session_id=session_id,
-            model=model,
-            platform="chatgpt-codex",
-            conversation_id=conversation_id,
-        )
-        session_start_hook_count = len(results) if isinstance(results, list) else 0
-    except Exception as exc:
-        session_start_hook_error = f"{type(exc).__name__}: {exc}"
+    if qa_session_init not in {"no_hooks", "minimal"}:
+        try:
+            results = h["invoke_hook"](
+                "on_session_start",
+                session_id=session_id,
+                model=model,
+                platform="chatgpt-codex",
+                conversation_id=conversation_id,
+            )
+            session_start_hook_count = len(results) if isinstance(results, list) else 0
+        except Exception as exc:
+            session_start_hook_error = f"{type(exc).__name__}: {exc}"
 
     runtime = SessionRuntime(
         session_id=session_id,
@@ -737,6 +748,7 @@ def _session(session_id: str, payload: Optional[dict[str, Any]] = None) -> Sessi
             "context_engine_error": context_engine_error,
             "session_start_hook_count": session_start_hook_count,
             "session_start_hook_error": session_start_hook_error,
+            "qa_session_init": qa_session_init,
         }
     )
     return runtime

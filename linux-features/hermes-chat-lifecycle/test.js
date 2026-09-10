@@ -720,6 +720,57 @@ test("Python helper derives stable task identity from canonical conversation acr
   }
 });
 
+test("Python helper QA session-init modes gate memory, context, and session hooks independently", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-session-init-"));
+  try {
+    const run = (mode) => spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import importlib.util, json, sys",
+          "spec = importlib.util.spec_from_file_location('lifecycle_helper_under_test', sys.argv[1])",
+          "module = importlib.util.module_from_spec(spec)",
+          "sys.modules[spec.name] = module",
+          "spec.loader.exec_module(module)",
+          "calls = []",
+          "class ContextEngine:",
+          "    name = 'fake-context'",
+          "    def on_session_start(self, *args, **kwargs): calls.append('context_start')",
+          "def memory(session_id): calls.append('memory'); return (None, 'fake-memory')",
+          "def get_context(): calls.append('context_get'); return ContextEngine()",
+          "def hook(*args, **kwargs): calls.append('hook'); return []",
+          "module._create_memory_manager = memory",
+          "module._load_hermes = lambda: {'get_plugin_context_engine': get_context, 'get_hermes_home': lambda: '', 'invoke_hook': hook}",
+          "runtime = module._session('hs_codex_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', {'conversation_id': 'local-chatgpt:qa-session-init'})",
+          "print(json.dumps(calls))",
+        ].join("\n"),
+        HELPER,
+      ],
+      {
+        encoding: "utf8",
+        env: isolatedHermesPythonEnv({
+          CODEX_LINUX_APP_STATE_DIR: path.join(root, mode),
+          CODEX_HERMES_QA_SESSION_INIT: mode,
+        }),
+      },
+    );
+
+    const callsFor = (mode) => {
+      const result = run(mode);
+      assert.equal(result.status, 0, result.stderr);
+      return JSON.parse(result.stdout.trim());
+    };
+
+    assert.deepEqual(callsFor("no_memory"), ["context_get", "context_start", "hook"]);
+    assert.deepEqual(callsFor("no_context"), ["memory", "hook"]);
+    assert.deepEqual(callsFor("no_hooks"), ["memory", "context_get", "context_start"]);
+    assert.deepEqual(callsFor("minimal"), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Python helper forwards native hook context without requiring the real Hermes install", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-chat-lifecycle-helper-"));
   try {
