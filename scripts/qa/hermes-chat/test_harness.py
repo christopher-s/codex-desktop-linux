@@ -177,25 +177,39 @@ class LCMTests(unittest.TestCase):
 
 
 class AppEnvironmentTests(unittest.TestCase):
-    def test_transient_unit_forwards_only_lcm_database_override(self) -> None:
-        old_lcm = os.environ.get("LCM_DATABASE_PATH")
-        old_home = os.environ.get("HERMES_HOME")
+    def test_transient_unit_forwards_only_isolated_lcm_and_qa_controls(self) -> None:
+        keys = (
+            "LCM_DATABASE_PATH",
+            "CODEX_HERMES_QA_FAULT",
+            "CODEX_HERMES_QA_FAST_BEGIN",
+            "CODEX_HERMES_QA_FAST_IDENTITY",
+            "CODEX_HERMES_QA_SESSION_INIT",
+            "HERMES_HOME",
+        )
+        old = {key: os.environ.get(key) for key in keys}
         try:
             os.environ["LCM_DATABASE_PATH"] = "/tmp/hermes-qa-isolated-lcm.db"
+            os.environ["CODEX_HERMES_QA_FAULT"] = "identity_only"
+            os.environ["CODEX_HERMES_QA_FAST_BEGIN"] = "1"
+            os.environ["CODEX_HERMES_QA_FAST_IDENTITY"] = "1"
+            os.environ["CODEX_HERMES_QA_SESSION_INIT"] = "minimal"
             os.environ["HERMES_HOME"] = "/tmp/must-not-forward"
             self.assertEqual(
                 transient_environment_args(),
-                ["--setenv=LCM_DATABASE_PATH=/tmp/hermes-qa-isolated-lcm.db"],
+                [
+                    "--setenv=LCM_DATABASE_PATH=/tmp/hermes-qa-isolated-lcm.db",
+                    "--setenv=CODEX_HERMES_QA_FAULT=identity_only",
+                    "--setenv=CODEX_HERMES_QA_FAST_BEGIN=1",
+                    "--setenv=CODEX_HERMES_QA_FAST_IDENTITY=1",
+                    "--setenv=CODEX_HERMES_QA_SESSION_INIT=minimal",
+                ],
             )
         finally:
-            if old_lcm is None:
-                os.environ.pop("LCM_DATABASE_PATH", None)
-            else:
-                os.environ["LCM_DATABASE_PATH"] = old_lcm
-            if old_home is None:
-                os.environ.pop("HERMES_HOME", None)
-            else:
-                os.environ["HERMES_HOME"] = old_home
+            for key, value in old.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 class ShellQuoteTests(unittest.TestCase):
