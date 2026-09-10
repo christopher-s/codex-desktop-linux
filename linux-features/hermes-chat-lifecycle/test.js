@@ -477,7 +477,7 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
     "async function Xgi(e,t){",
     "let u='client',d=null,o={author:{role:`user`},content:{content_type:`text`,parts:[`hi`]}},s='turn',r='model';",
     "let f=0,p0=0,m=t.projectId??e.get(rB,u),h=t.conversationOrigin===void 0?e.get(tB,u):t.conversationOrigin;",
-    "let N={messages:[o]},i=Rpi(u,{scope:e,onTiming:()=>{},request:N,shouldLogLatency:!0}),prep=i.prepared;N.client_prepare_state=i.clientPrepareState;nativeCommit();",
+    "let N={messages:[o]},i=Rpi(u,{scope:e,onTiming:()=>{},request:N,shouldLogLatency:!0}),prep=i.prepared;N.client_prepare_state=i.clientPrepareState;nativeCommit();o={late:true};",
     "let p=await e.get(yR).startCompletionStream();",
     "let be=t=>{ve(t,`completed`)&&(Vfi(t),done())},",
     "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
@@ -500,16 +500,20 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.equal(patchRendererAsset(ambiguousSuccess), ambiguousSuccess);
   const patched = applyTwice(patchRendererAsset, source);
   assert.doesNotMatch(patched, /phase:`probe`/);
-  assert.match(patched, /\/\*codexLinuxHermesLateBeginV2\*\//);
-  assert.match(patched, /nativeCommit\(\);if\(o\?\.author\?\.role===`user`\)try\{\/\*codexLinuxHermesPlainChatLifecycle\*\/\/\*codexLinuxHermesLateBeginV2\*\/.*phase:`begin_turn`/);
+  assert.match(patched, /\/\*codexLinuxHermesStableUserCaptureV1\*\//);
+  assert.match(patched, /codexLinuxHermesUserTurn=o\?\.author\?\.role===`user`,codexLinuxHermesUserMessage=codexLinuxHermesMessageText\(o\)/);
+  assert.match(patched, /\/\*codexLinuxHermesLateBeginV3\*\//);
+  assert.match(patched, /nativeCommit\(\);o=\{late:true\};if\(codexLinuxHermesUserTurn\)try\{\/\*codexLinuxHermesPlainChatLifecycle\*\/\/\*codexLinuxHermesLateBeginV3\*\/.*phase:`begin_turn`/);
   assert.ok(patched.indexOf("nativeCommit();") < patched.indexOf("phase:`begin_turn`"));
   assert.match(patched, /nativeCommit\(\);.*phase:`begin_turn`.*let p=await e\.get\(yR\)\.startCompletionStream\(\)/);
-  assert.match(patched, /if\(o\?\.author\?\.role===`user`\)try\{/);
+  assert.match(patched, /if\(codexLinuxHermesUserTurn\)try\{/);
+  assert.doesNotMatch(patched, /if\(o\?\.author\?\.role===`user`\)try\{/);
   assert.doesNotMatch(patched, /if\(o\?\.author\.role===`user`\)try\{/);
   assert.doesNotMatch(patched, /o\?\.author\.role===`user`&&typeof m===`string`&&m\.length>0/);
   assert.match(patched, /phase:`pre_api_request`/);
   assert.match(patched, /codexLinuxHermesMessageText=m=>/);
-  assert.match(patched, /user_message:codexLinuxHermesMessageText\(o\)/);
+  assert.match(patched, /user_message:codexLinuxHermesUserMessage/);
+  assert.doesNotMatch(patched, /user_message:codexLinuxHermesMessageText\(o\)/);
   assert.match(patched, /assistant_message:codexLinuxHermesMessageText\(g\)/);
   assert.match(
     patched,
@@ -547,7 +551,7 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
     "async function Xgi(e,t){",
     "let u='client',d=null,o={author:{role:`user`},content:{content_type:`text`,parts:[`hi`]}},s='turn',r='model';",
     "let f=0,p0=0,m=t.projectId??e.get(rB,u),h=t.conversationOrigin===void 0?e.get(tB,u):t.conversationOrigin;",
-    "let N={messages:[o]},i=Rpi(u,{scope:e,onTiming:()=>{},request:N,shouldLogLatency:!0}),prep=i.prepared;N.client_prepare_state=i.clientPrepareState;nativeCommit();",
+    "let N={messages:[o]},i=Rpi(u,{scope:e,onTiming:()=>{},request:N,shouldLogLatency:!0}),prep=i.prepared;N.client_prepare_state=i.clientPrepareState;nativeCommit();o={late:true};",
     "let p=await e.get(yR).startCompletionStream();",
     "let be=t=>{ve(t,`completed`)&&(Vfi(t),done())},",
     "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
@@ -560,18 +564,31 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   ].join("");
   const current = patchRendererAsset(source);
   const marker = "/*codexLinuxHermesPlainChatLifecycle*/";
-  const currentGate = `if(o?.author?.role===\`user\`)try{${marker}`;
+  const stableCapture = "/*codexLinuxHermesStableUserCaptureV1*/codexLinuxHermesUserTurn=o?.author?.role===`user`,codexLinuxHermesUserMessage=codexLinuxHermesMessageText(o),";
+  const currentGate = `if(codexLinuxHermesUserTurn)try{${marker}`;
+  const currentV3Gate = `${currentGate}/*codexLinuxHermesLateBeginV3*/`;
+  const installedV2Gate = `if(o?.author?.role===\`user\`)try{${marker}/*codexLinuxHermesLateBeginV2*/`;
   const installedV1Gate = `if(o?.author.role===\`user\`)try{${marker}/*codexLinuxHermesLateBeginV1*/`;
-  const currentV2Gate = `${currentGate}/*codexLinuxHermesLateBeginV2*/`;
   const legacyGate = "if(o?.author.role===`user`&&typeof m===`string`&&m.length>0)try{";
-  assert.ok(current.includes(currentGate));
-  assert.ok(current.includes(currentV2Gate));
+  const stableUserMessage = "user_message:codexLinuxHermesUserMessage";
+  const legacyUserMessage = "user_message:codexLinuxHermesMessageText(o)";
+  assert.ok(current.includes(stableCapture));
+  assert.ok(current.includes(currentV3Gate));
+  assert.equal(current.split(stableUserMessage).length - 1, 3);
 
-  const installedV1 = current.replace(currentV2Gate, installedV1Gate);
-  assert.notEqual(installedV1, current);
+  const installedLateV2 = current
+    .replace(stableCapture, "")
+    .replace(currentV3Gate, installedV2Gate)
+    .split(stableUserMessage).join(legacyUserMessage);
+  assert.notEqual(installedLateV2, current);
+  assert.equal(installedLateV2.split(legacyUserMessage).length - 1, 3);
+  assert.equal(patchRendererAsset(installedLateV2), current);
+
+  const installedV1 = installedLateV2.replace(installedV2Gate, installedV1Gate);
+  assert.notEqual(installedV1, installedLateV2);
   assert.equal(patchRendererAsset(installedV1), current);
 
-  const legacy = current.replace(currentGate, legacyGate);
+  const legacy = current.replace(currentV3Gate, `${legacyGate}/*codexLinuxHermesLateBeginV3*/`);
   assert.notEqual(legacy, current);
   assert.equal(patchRendererAsset(legacy), current);
 
@@ -579,12 +596,13 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   assert.notEqual(unversioned, current);
   assert.equal(patchRendererAsset(unversioned), current);
 
-  const lateStart = "if(o?.author?.role===`user`)try{/*codexLinuxHermesPlainChatLifecycle*//*codexLinuxHermesLateBeginV2*/";
+  const lateStart = currentV3Gate;
   const lateEnd = "catch(e){if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}codexLinuxHermesPreflightMap.delete(u),codexLinuxHermesPreflight=null,console.warn(`[hermes-chat-lifecycle] begin_turn failed`,e)}";
   const lateAt = current.indexOf(lateStart);
   const lateEndAt = current.indexOf(lateEnd, lateAt);
   assert.ok(lateAt >= 0 && lateEndAt > lateAt);
   let historicalEarly = current.slice(0, lateAt) + current.slice(lateEndAt + lateEnd.length);
+  historicalEarly = historicalEarly.replace(stableCapture, "").split(stableUserMessage).join(legacyUserMessage);
   const developerContextV2 = "/*codexLinuxHermesDeveloperContextV2*/let codexLinuxHermesContextMessages=[];typeof n.system_context===`string`&&n.system_context.trim().length>0&&codexLinuxHermesContextMessages.push(Mk(n.system_context,Nk(),!0));typeof n.user_context===`string`&&n.user_context.trim().length>0&&codexLinuxHermesContextMessages.push(Mk(n.user_context,Nk(),!0));codexLinuxHermesContextMessages.length>0&&(t.extraDeveloperInstructionMessages=[...t.extraDeveloperInstructionMessages??[],...codexLinuxHermesContextMessages])";
   const earlyBlock = "if(o?.author.role===`user`)try{/*codexLinuxHermesPlainChatLifecycle*/let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:`probe`,gizmo_id:m});if(q?.enabled===!0){codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:q.qa_fault??null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:`begin_turn`,gizmo_id:m,conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});if(n?.enabled===!0){codexLinuxHermesLifecycle=n;if(![`disable_context`,`begin_only`].includes(codexLinuxHermesPreflight.qaFault)){/*codexLinuxHermesQaFaultControlsV2*/" + developerContextV2 + "}}if(codexLinuxHermesPreflight.cancelled){codexLinuxHermesNotify(`abort_turn`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}}}catch(e){codexLinuxHermesPreflightMap.delete(u),console.warn(`[hermes-chat-lifecycle] begin_turn failed`,e)}";
   const originAnchor = "let h=t.conversationOrigin===void 0?e.get(tB,u):t.conversationOrigin";
@@ -651,7 +669,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
     "async function Xgi(e,t){",
     "let u='client',d=null,o={author:{role:`user`},content:{content_type:`text`,parts:[`hi`]}},s='turn',r='model';",
     "let f=0,p0=0,m=t.projectId??e.get(dB,u),h=t.conversationOrigin===void 0?e.get(lB,u):t.conversationOrigin;",
-    "let N={messages:[o]},i=Rpi(u,{scope:e,onTiming:()=>{},request:N,shouldLogLatency:!0}),prep=i.prepared;N.client_prepare_state=i.clientPrepareState;nativeCommit();",
+    "let N={messages:[o]},i=Rpi(u,{scope:e,onTiming:()=>{},request:N,shouldLogLatency:!0}),prep=i.prepared;N.client_prepare_state=i.clientPrepareState;nativeCommit();o={late:true};",
     "let p=await e.get(wR).startCompletionStream();",
     "let be=t=>{ve(t,`completed`)&&(Gfi(t),done())},",
     "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
@@ -672,9 +690,13 @@ test("renderer patch follows current upstream minified identifiers structurally"
     /\/\*codexLinuxHermesAssistantStateV2\*\/let c=I2\(e\.get,u\)\?\?u,a=e\.get\(H2,c\),h=e\.get\(X2,c\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
   );
   assert.doesNotMatch(patched, /phase:`probe`/);
-  assert.match(patched, /\/\*codexLinuxHermesLateBeginV2\*\//);
-  assert.match(patched, /if\(o\?\.author\?\.role===`user`\)try\{/);
+  assert.match(patched, /\/\*codexLinuxHermesStableUserCaptureV1\*\//);
+  assert.match(patched, /\/\*codexLinuxHermesLateBeginV3\*\//);
+  assert.match(patched, /if\(codexLinuxHermesUserTurn\)try\{/);
+  assert.doesNotMatch(patched, /if\(o\?\.author\?\.role===`user`\)try\{/);
   assert.doesNotMatch(patched, /if\(o\?\.author\.role===`user`\)try\{/);
+  assert.match(patched, /user_message:codexLinuxHermesUserMessage/);
+  assert.doesNotMatch(patched, /user_message:codexLinuxHermesMessageText\(o\)/);
   assert.match(patched, /\/\*codexLinuxHermesDeveloperContextV3\*\//);
   assert.match(patched, /DV\(n\.system_context,IV\(\),!0\)/);
   assert.match(patched, /DV\(n\.user_context,IV\(\),!0\)/);

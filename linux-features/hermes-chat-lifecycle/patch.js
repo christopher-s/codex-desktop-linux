@@ -20,8 +20,10 @@ const QA_CONTROL_MARKER = "codexLinuxHermesQaFaultControls";
 const QA_CONTROL_V2_MARKER = "codexLinuxHermesQaFaultControlsV2";
 const DEVELOPER_CONTEXT_V2_MARKER = "codexLinuxHermesDeveloperContextV2";
 const DEVELOPER_CONTEXT_V3_MARKER = "codexLinuxHermesDeveloperContextV3";
+const STABLE_USER_CAPTURE_V1_MARKER = "codexLinuxHermesStableUserCaptureV1";
 const LATE_BEGIN_V1_MARKER = "codexLinuxHermesLateBeginV1";
 const LATE_BEGIN_V2_MARKER = "codexLinuxHermesLateBeginV2";
+const LATE_BEGIN_V3_MARKER = "codexLinuxHermesLateBeginV3";
 const COMPLETION_FINALIZATION_V2_MARKER = "codexLinuxHermesCompletionFinalizationV2";
 const COMPLETION_FINALIZATION_V3_MARKER = "codexLinuxHermesCompletionFinalizationV3";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
@@ -233,10 +235,14 @@ function developerContextPayloadV3(contract, requestVar) {
     `codexLinuxHermesContextMessages.length>0&&(${requestVar}.messages=[...${requestVar}.messages??[],...codexLinuxHermesContextMessages])`;
 }
 
+function stableUserCapturePayload() {
+  return `/*${STABLE_USER_CAPTURE_V1_MARKER}*/codexLinuxHermesUserTurn=o?.author?.role===\`user\`,codexLinuxHermesUserMessage=codexLinuxHermesMessageText(o),`;
+}
+
 function lateBeginPayload(projectVar, requestVar, developerMessageContract) {
-  return `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*//*${LATE_BEGIN_V2_MARKER}*/` +
+  return `if(codexLinuxHermesUserTurn)try{/*${PLAIN_CHAT_RENDERER_MARKER}*//*${LATE_BEGIN_V3_MARKER}*/` +
     `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
-    `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +
+    `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesUserMessage,model:r});` +
     `codexLinuxHermesPreflight.qaFault=n?.qa_fault??null;` +
     `if(n?.enabled===!0){${RENDERER_MARKER}=n;if(![\`disable_context\`,\`begin_only\`].includes(codexLinuxHermesPreflight.qaFault)){/*${QA_CONTROL_V2_MARKER}*/${developerContextPayloadV3(developerMessageContract, requestVar)}}}` +
     `if(codexLinuxHermesPreflight.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
@@ -570,6 +576,32 @@ function upgradeRendererCompletionFinalization(source) {
   return insertCompletionFinalizationV3(stripped, strippedChain, terminal[1]);
 }
 
+function upgradeRendererStableUserCapture(source) {
+  const marker = `/*${STABLE_USER_CAPTURE_V1_MARKER}*/`;
+  let upgraded = source;
+  if (!upgraded.includes(marker)) {
+    const anchor = "codexLinuxHermesPreflightMap=globalThis.__codexLinuxHermesLifecyclePreflights??=(new Map),";
+    if (countOf(upgraded, anchor) !== 1) {
+      throw new Error("Hermes lifecycle renderer stable-user capture anchor is missing or ambiguous");
+    }
+    upgraded = upgraded.replace(anchor, stableUserCapturePayload() + anchor);
+  } else if (countOf(upgraded, marker) !== 1) {
+    throw new Error("Hermes lifecycle renderer stable-user capture marker is ambiguous");
+  }
+
+  const stableCapture = `${marker}codexLinuxHermesUserTurn=o?.author?.role===\`user\`,codexLinuxHermesUserMessage=codexLinuxHermesMessageText(o),`;
+  if (!upgraded.includes(stableCapture)) {
+    throw new Error("Hermes lifecycle renderer stable-user capture payload is malformed");
+  }
+  const legacyUserMessage = "user_message:codexLinuxHermesMessageText(o)";
+  const legacyCount = countOf(upgraded, legacyUserMessage);
+  if (legacyCount > 0) upgraded = upgraded.split(legacyUserMessage).join("user_message:codexLinuxHermesUserMessage");
+  if (countOf(upgraded, "user_message:codexLinuxHermesUserMessage") !== 3) {
+    throw new Error("Hermes lifecycle renderer stable user-message propagation is missing or ambiguous");
+  }
+  return upgraded;
+}
+
 function upgradeRendererLateBegin(source) {
   const requestVar = discoverPreparedRequestVariable(source);
   if (requestVar == null) {
@@ -587,35 +619,51 @@ function upgradeRendererLateBegin(source) {
   const projectVar = beginMatches[0][1];
   const lateV1Marker = `/*${LATE_BEGIN_V1_MARKER}*/`;
   const lateV2Marker = `/*${LATE_BEGIN_V2_MARKER}*/`;
+  const lateV3Marker = `/*${LATE_BEGIN_V3_MARKER}*/`;
   const contextV3Marker = `/*${DEVELOPER_CONTEXT_V3_MARKER}*/`;
+  const stableCaptureMarker = `/*${STABLE_USER_CAPTURE_V1_MARKER}*/`;
+  const v3Gate = `if(codexLinuxHermesUserTurn)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV3Marker}`;
   let upgraded = source;
 
   if (upgraded.includes(lateV1Marker)) {
-    if (countOf(upgraded, lateV1Marker) !== 1 || upgraded.includes(lateV2Marker)) {
+    if (countOf(upgraded, lateV1Marker) !== 1 || upgraded.includes(lateV2Marker) || upgraded.includes(lateV3Marker)) {
       throw new Error("Hermes lifecycle renderer late-begin V1 marker is malformed or ambiguous");
     }
     const v1Gate = `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV1Marker}`;
-    const v2Gate = `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV2Marker}`;
     if (countOf(upgraded, v1Gate) !== 1) {
       throw new Error("Hermes lifecycle renderer late-begin V1 guard is malformed or ambiguous");
     }
-    upgraded = upgraded.replace(v1Gate, v2Gate);
-  }
-
-  if (upgraded.includes(lateV2Marker)) {
-    if (countOf(upgraded, lateV2Marker) !== 1 || upgraded.includes(lateV1Marker) || countOf(upgraded, contextV3Marker) !== 1) {
+    upgraded = upgraded.replace(v1Gate, v3Gate);
+  } else if (upgraded.includes(lateV2Marker)) {
+    if (countOf(upgraded, lateV2Marker) !== 1 || upgraded.includes(lateV3Marker)) {
       throw new Error("Hermes lifecycle renderer late-begin V2 marker is malformed or ambiguous");
     }
-    const safeGate = `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV2Marker}`;
-    if (countOf(upgraded, safeGate) !== 1) {
+    const v2Gate = `if(o?.author?.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/${lateV2Marker}`;
+    if (countOf(upgraded, v2Gate) !== 1) {
       throw new Error("Hermes lifecycle renderer late-begin V2 guard is malformed or ambiguous");
     }
+    upgraded = upgraded.replace(v2Gate, v3Gate);
+  }
+
+  if (upgraded.includes(lateV3Marker)) {
+    if (
+      countOf(upgraded, lateV3Marker) !== 1 ||
+      upgraded.includes(lateV1Marker) ||
+      upgraded.includes(lateV2Marker) ||
+      countOf(upgraded, contextV3Marker) !== 1 ||
+      countOf(upgraded, stableCaptureMarker) !== 1
+    ) {
+      throw new Error("Hermes lifecycle renderer late-begin V3 marker is malformed or ambiguous");
+    }
+    if (countOf(upgraded, v3Gate) !== 1) {
+      throw new Error("Hermes lifecycle renderer late-begin V3 guard is malformed or ambiguous");
+    }
     if (upgraded.includes("hermesChatLifecycle?.({phase:`probe`")) {
-      throw new Error("Hermes lifecycle renderer late-begin V2 still contains an early probe");
+      throw new Error("Hermes lifecycle renderer late-begin V3 still contains an early probe");
     }
     const expectedContextTail = `${requestVar}.messages=[...${requestVar}.messages??[],...codexLinuxHermesContextMessages]`;
     if (!upgraded.includes(expectedContextTail)) {
-      throw new Error("Hermes lifecycle renderer late-begin V2 context does not target the prepared request");
+      throw new Error("Hermes lifecycle renderer late-begin V3 context does not target the prepared request");
     }
     return upgraded;
   }
@@ -648,15 +696,19 @@ function upgradeRendererPlainChatLifecycle(source) {
   if (!source.includes(`let ${RENDERER_MARKER}=null`)) return source;
   let upgraded = source;
   if (!upgraded.includes(`/*${PLAIN_CHAT_RENDERER_MARKER}*/`)) {
-    const lateLookahead = upgraded.includes(`/*${LATE_BEGIN_V2_MARKER}*/`)
-      ? `/*${LATE_BEGIN_V2_MARKER}*/`
-      : `/*${LATE_BEGIN_V1_MARKER}*/`;
+    const lateLookahead = upgraded.includes(`/*${LATE_BEGIN_V3_MARKER}*/`)
+      ? `/*${LATE_BEGIN_V3_MARKER}*/`
+      : upgraded.includes(`/*${LATE_BEGIN_V2_MARKER}*/`)
+        ? `/*${LATE_BEGIN_V2_MARKER}*/`
+        : `/*${LATE_BEGIN_V1_MARKER}*/`;
     if (upgraded.includes(lateLookahead)) {
       const legacyLateGate = /if\(o\?\.author\.role===`user`&&typeof ([A-Za-z_$][\w$]*)===`string`&&\1\.length>0\)try\{/gu;
       const legacyLateMatches = [...upgraded.matchAll(legacyLateGate)].filter((match) => upgraded.startsWith(lateLookahead, match.index + match[0].length));
-      const currentLateGate = lateLookahead.includes(LATE_BEGIN_V2_MARKER)
-        ? "if(o?.author?.role===`user`)try{"
-        : "if(o?.author.role===`user`)try{";
+      const currentLateGate = lateLookahead.includes(LATE_BEGIN_V3_MARKER)
+        ? "if(codexLinuxHermesUserTurn)try{"
+        : lateLookahead.includes(LATE_BEGIN_V2_MARKER)
+          ? "if(o?.author?.role===`user`)try{"
+          : "if(o?.author.role===`user`)try{";
       const currentLateMatches = [];
       for (let at = upgraded.indexOf(currentLateGate); at >= 0; at = upgraded.indexOf(currentLateGate, at + currentLateGate.length)) {
         if (upgraded.startsWith(lateLookahead, at + currentLateGate.length)) currentLateMatches.push(at);
@@ -699,6 +751,7 @@ function upgradeRendererPlainChatLifecycle(source) {
   upgraded = upgradeRendererAssistantState(upgraded);
   upgraded = upgradeRendererQaFaultControls(upgraded);
   upgraded = upgradeRendererDeveloperContext(upgraded);
+  upgraded = upgradeRendererStableUserCapture(upgraded);
   return upgradeRendererLateBegin(upgraded);
 }
 
@@ -742,10 +795,11 @@ function patchRendererAsset(source) {
     `${projectVar}=t.projectId??e.get(${projectAtom},u);` +
     `let ${RENDERER_MARKER}=null,codexLinuxHermesTerminalSent=!1,codexLinuxHermesPreflight=null,` +
     `codexLinuxHermesMessageText=m=>typeof m===\`string\`?m:Array.isArray(m?.content?.parts)?m.content.parts.filter(x=>typeof x===\`string\`).join(\`\\n\`):typeof m?.content?.text===\`string\`?m.content.text:\`\`,` +
+    stableUserCapturePayload() +
     `codexLinuxHermesPreflightMap=globalThis.__codexLinuxHermesLifecyclePreflights??=(new Map),` +
     `codexLinuxHermesNotify=(n,i={})=>{if(${RENDERER_MARKER}?.enabled!==!0||codexLinuxHermesTerminalSent)return;codexLinuxHermesTerminalSent=!0,codexLinuxHermesPreflightMap.delete(u);` +
     `/*${ASSISTANT_STATE_V2_MARKER}*/let c=${conversationResolver}(e.get,u)??u,a=e.get(${stateAtoms.currentNodeAtom},c),h=e.get(${stateAtoms.mappingAtom},c)??{},g=a==null?null:h[a]?.message??null;` +
-    `globalThis.electronBridge?.hermesChatLifecycle?.({phase:n,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),assistant_message:codexLinuxHermesMessageText(g),model:r,...i}).catch(()=>{})};` +
+    `globalThis.electronBridge?.hermesChatLifecycle?.({phase:n,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesUserMessage,assistant_message:codexLinuxHermesMessageText(g),model:r,...i}).catch(()=>{})};` +
     `let ${originVar}=t.conversationOrigin===void 0?e.get(${originAtom},u):t.conversationOrigin`;
 
   let patched = source.replace(full, injected);
@@ -761,7 +815,7 @@ function patchRendererAsset(source) {
   patched = patched.replace(
     apiStartAnchor,
     lateBeginPayload(projectVar, requestVar, developerMessageContract) +
-      `if(${RENDERER_MARKER}?.enabled===!0&&codexLinuxHermesPreflight?.qaFault!==\`begin_only\`)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\`,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r})}catch(e){console.warn(\`[hermes-chat-lifecycle] pre_api_request failed\`,e)}` +
+      `if(${RENDERER_MARKER}?.enabled===!0&&codexLinuxHermesPreflight?.qaFault!==\`begin_only\`)try{await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`pre_api_request\`,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesUserMessage,model:r})}catch(e){console.warn(\`[hermes-chat-lifecycle] pre_api_request failed\`,e)}` +
       `if(codexLinuxHermesPreflight?.qaFault===\`model_call_error\`){xe({error:\`qa-injected-model-call-error\`,errorKind:\`network\`,requestId:s,type:\`fetch-stream-error\`}),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
       `if(codexLinuxHermesPreflight?.cancelled){codexLinuxHermesNotify(\`abort_turn\`),codexLinuxHermesPreflightMap.delete(u);return{conversationId:u,serverConversationId:d,streamRequestId:null}}` +
       `codexLinuxHermesPreflight&&(codexLinuxHermesPreflight.started=!0);let p=await e.get(${streamAtom}).startCompletionStream(`,
