@@ -121,6 +121,7 @@ async function codexLinuxHermesLifecycleInvoke(e){
     let k=codexLinuxHermesLifecycleKey({client_conversation_id:cn}),s=codexLinuxHermesLifecycleSessions.get(k);
     s??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
     codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId;
+    if(process.env.CODEX_HERMES_QA_FAULT===\`identity_only\`&&process.env.CODEX_HERMES_QA_FAST_IDENTITY===\`1\`)return{ok:!0,enabled:!0,phase:\`conversation_identity\`,session_id:r.session_id,client_conversation_id:cn,server_conversation_id:r.server_conversation_id??r.conversation_id??null,qa_fast_identity:!0};
     return await codexLinuxHermesHostRequest(r);
   }
   if(e.phase===\`tool_call\`){

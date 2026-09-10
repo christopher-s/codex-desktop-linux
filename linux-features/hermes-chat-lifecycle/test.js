@@ -98,6 +98,28 @@ test("probe exposes only supported lifecycle QA fault modes", async () => {
   assert.equal(probe.qa_fault, null);
 });
 
+test("identity_only fast-identity QA control returns a successful identity without helper work", async () => {
+  const { api } = manifestHarness({
+    CODEX_HERMES_QA_FAULT: "identity_only",
+    CODEX_HERMES_QA_FAST_IDENTITY: "1",
+  });
+  const localId = "local-chatgpt:55555555-5555-4555-8555-555555555555";
+  const serverId = "66666666-6666-4666-8666-666666666666";
+  const identity = JSON.parse(JSON.stringify(await api.invoke({
+    phase: "conversation_identity",
+    client_conversation_id: localId,
+    conversation_id: serverId,
+    server_conversation_id: serverId,
+  })));
+  assert.equal(identity.ok, true);
+  assert.equal(identity.enabled, true);
+  assert.equal(identity.phase, "conversation_identity");
+  assert.equal(identity.qa_fast_identity, true);
+  assert.equal(identity.client_conversation_id, localId);
+  assert.equal(identity.server_conversation_id, serverId);
+  assert.match(identity.session_id, /^hs_codex_[0-9a-f]{32}$/);
+});
+
 test("begin_only fast-begin QA control returns an enabled session without helper work", async () => {
   const { api } = manifestHarness({
     CODEX_HERMES_QA_FAULT: "begin_only",
