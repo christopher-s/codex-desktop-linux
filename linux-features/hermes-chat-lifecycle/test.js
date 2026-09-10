@@ -462,6 +462,11 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.equal(patchRendererAsset(missingDeveloperContract), missingDeveloperContract);
   const ambiguousDeveloperContract = source + "function Gz({extraDeveloperInstructions:a=[],oneTurnDeveloperInstructions:b=[]}){return{extraDeveloperInstructionMessages:[...a.map(x=>QV(x,RV())),...b.map(y=>QV(y,RV(),!0))]}}";
   assert.equal(patchRendererAsset(ambiguousDeveloperContract), ambiguousDeveloperContract);
+  const ambiguousSuccess = source.replace(
+    "xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
+    "be2=q=>{ve(q,`completed`)&&(Vfi2(q),done2())},xe=n=>{if(!ve(n.requestId,`failed`))return;failed()},",
+  );
+  assert.equal(patchRendererAsset(ambiguousSuccess), ambiguousSuccess);
   const patched = applyTwice(patchRendererAsset, source);
   assert.match(patched, /phase:`probe`/);
   assert.match(patched, /phase:`begin_turn`/);
@@ -483,7 +488,7 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.match(patched, /\/\*codexLinuxHermesQaFaultControlsV2\*\//);
   assert.match(patched, /!\[`disable_context`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\.qaFault\)/);
   assert.match(patched, /codexLinuxHermesPreflight\?\.qaFault!==`begin_only`\)try\{await globalThis\.electronBridge\?\.hermesChatLifecycle\?\.\(\{phase:`pre_api_request`/);
-  assert.match(patched, /\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`/);
+  assert.match(patched, /done\(\),\/\*codexLinuxHermesCompletionFinalizationV2\*\/\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`/);
   assert.match(patched, /xe\(\{error:`qa-injected-model-call-error`/);
   assert.match(patched, /qa-injected-model-call-error/);
   assert.match(patched, /__codexLinuxHermesLifecyclePreflights/);
@@ -548,15 +553,31 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   assert.notEqual(legacyAssistantState, current);
   assert.equal(patchRendererAsset(legacyAssistantState), current);
 
-  const completionOrder = current.match(
-    /([A-Za-z_$][\w$]*)\(t\),(\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\))/,
+  const completionTail = current.match(
+    /(done\(\)),\/\*codexLinuxHermesCompletionFinalizationV2\*\/(\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\))/,
   );
-  assert.ok(completionOrder);
-  const oldCompletionOrder = current.replace(
-    completionOrder[0],
-    `${completionOrder[2]},${completionOrder[1]}(t)`,
+  assert.ok(completionTail);
+  const midChainCompletion = current.replace(
+    completionTail[0],
+    `${completionTail[2]},${completionTail[1]}`,
   );
-  assert.notEqual(oldCompletionOrder, current);
+  assert.notEqual(midChainCompletion, current);
+  assert.equal(patchRendererAsset(midChainCompletion), current);
+
+  const misplacedV2 = current.replace(
+    completionTail[0],
+    `/*codexLinuxHermesCompletionFinalizationV2*/${completionTail[2]},${completionTail[1]}`,
+  );
+  assert.throws(
+    () => patchRendererAsset(misplacedV2),
+    /completion-finalization V2 marker is not at the native success tail/,
+  );
+
+  const oldCompletionOrder = midChainCompletion.replace(
+    `Vfi(t),${completionTail[2]}`,
+    `${completionTail[2]},Vfi(t)`,
+  );
+  assert.notEqual(oldCompletionOrder, midChainCompletion);
   assert.equal(patchRendererAsset(oldCompletionOrder), current);
   assert.equal(patchRendererAsset(current), current);
 });
@@ -581,7 +602,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
   assert.notEqual(patched, source);
   assert.match(patched, /async function i_i\(e,t,n\)\{let codexLinuxHermesPendingPreflight=/);
   assert.match(patched, /Nqr\(\{scope:e,conversationId:u,streamRequestId:g\}\),codexLinuxHermesPreflightMap\.delete\(u\)/);
-  assert.match(patched, /Gfi\(t\),\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
+  assert.match(patched, /Gfi\(t\),done\(\),\/\*codexLinuxHermesCompletionFinalizationV2\*\/\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
   assert.match(
     patched,
     /\/\*codexLinuxHermesAssistantStateV2\*\/let c=I2\(e\.get,u\)\?\?u,a=e\.get\(H2,c\),h=e\.get\(X2,c\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
