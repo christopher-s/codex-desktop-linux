@@ -20,6 +20,7 @@ const QA_CONTROL_MARKER = "codexLinuxHermesQaFaultControls";
 const QA_CONTROL_V2_MARKER = "codexLinuxHermesQaFaultControlsV2";
 const DEVELOPER_CONTEXT_V2_MARKER = "codexLinuxHermesDeveloperContextV2";
 const COMPLETION_FINALIZATION_V2_MARKER = "codexLinuxHermesCompletionFinalizationV2";
+const COMPLETION_FINALIZATION_V3_MARKER = "codexLinuxHermesCompletionFinalizationV3";
 const APP_INITIAL_PATTERN = /^app-initial-[^.]+\.js$/;
 
 function countOf(source, needle) {
@@ -82,6 +83,66 @@ function findMatchingParen(source, openIndex) {
   return -1;
 }
 
+function findLastTopLevelComma(source, startIndex, endIndex) {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let quote = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  let lastComma = -1;
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (char === "\n" || char === "\r") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote != null) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") parenDepth += 1;
+    else if (char === ")") parenDepth -= 1;
+    else if (char === "[") bracketDepth += 1;
+    else if (char === "]") bracketDepth -= 1;
+    else if (char === "{") braceDepth += 1;
+    else if (char === "}") braceDepth -= 1;
+    else if (char === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) lastComma = index;
+  }
+  return lastComma;
+}
+
 function discoverCompletionSuccessChain(source) {
   const contract = /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\(\2,`completed`\)&&\(/gu;
   const matches = [...source.matchAll(contract)];
@@ -103,6 +164,17 @@ function completionNotifyExpression(serverConversationVar) {
   return `[` +
     "`suppress_complete`,`begin_only`" +
     `].includes(codexLinuxHermesPreflight?.qaFault)?void 0:codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:${serverConversationVar}})`;
+}
+
+function completionFinalizationV3Expression(serverConversationVar) {
+  return `/*${COMPLETION_FINALIZATION_V3_MARKER}*/queueMicrotask(()=>${completionNotifyExpression(serverConversationVar)})`;
+}
+
+function insertCompletionFinalizationV3(source, chain, serverConversationVar) {
+  const lastComma = findLastTopLevelComma(source, chain.openIndex + 1, chain.closeIndex);
+  const insertAt = lastComma >= 0 ? lastComma + 1 : chain.openIndex + 1;
+  const prefix = `${completionFinalizationV3Expression(serverConversationVar)},`;
+  return source.slice(0, insertAt) + prefix + source.slice(insertAt);
 }
 
 function discoverConversationStateAtoms(source) {
@@ -390,7 +462,7 @@ function upgradeRendererQaFaultControls(source) {
 }
 
 function upgradeRendererCompletionOrdering(source) {
-  if (source.includes(`/*${COMPLETION_FINALIZATION_V2_MARKER}*/`)) return source;
+  if (source.includes(`/*${COMPLETION_FINALIZATION_V2_MARKER}*/`) || source.includes(`/*${COMPLETION_FINALIZATION_V3_MARKER}*/`)) return source;
   const oldOrder = /((?:(?:codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`|\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\))\?void 0:)?codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)/gu;
   const oldMatches = [...source.matchAll(oldOrder)];
   if (oldMatches.length === 1) {
@@ -410,7 +482,8 @@ function upgradeRendererCompletionOrdering(source) {
 }
 
 function upgradeRendererCompletionFinalization(source) {
-  const marker = `/*${COMPLETION_FINALIZATION_V2_MARKER}*/`;
+  const markerV2 = `/*${COMPLETION_FINALIZATION_V2_MARKER}*/`;
+  const markerV3 = `/*${COMPLETION_FINALIZATION_V3_MARKER}*/`;
   const chain = discoverCompletionSuccessChain(source);
   if (chain == null) {
     throw new Error("Hermes lifecycle renderer completion success chain not found uniquely");
@@ -419,14 +492,18 @@ function upgradeRendererCompletionFinalization(source) {
   const terminalPattern = /(?:(?:codexLinuxHermesPreflight\?\.qaFault===`suppress_complete`|\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\))\?void 0:)?codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)/gu;
   const terminalMatches = [...chainBody.matchAll(terminalPattern)];
 
-  if (source.includes(marker)) {
-    if (countOf(source, marker) !== 1 || terminalMatches.length !== 1) {
-      throw new Error("Hermes lifecycle renderer completion-finalization V2 marker is malformed or ambiguous");
+  if (source.includes(markerV3)) {
+    if (countOf(source, markerV3) !== 1 || source.includes(markerV2) || terminalMatches.length !== 1) {
+      throw new Error("Hermes lifecycle renderer completion-finalization V3 marker is malformed or misplaced");
     }
     const terminal = terminalMatches[0];
-    const expectedTail = `${marker}${completionNotifyExpression(terminal[1])}`;
-    if (!chainBody.endsWith(expectedTail)) {
-      throw new Error("Hermes lifecycle renderer completion-finalization V2 marker is not at the native success tail");
+    const lastComma = findLastTopLevelComma(source, chain.openIndex + 1, chain.closeIndex);
+    if (lastComma < 0) {
+      throw new Error("Hermes lifecycle renderer completion-finalization V3 marker is malformed or misplaced");
+    }
+    const beforeFinal = source.slice(chain.openIndex + 1, lastComma);
+    if (!beforeFinal.endsWith(completionFinalizationV3Expression(terminal[1]))) {
+      throw new Error("Hermes lifecycle renderer completion-finalization V3 marker is malformed or misplaced");
     }
     return source;
   }
@@ -434,11 +511,22 @@ function upgradeRendererCompletionFinalization(source) {
   if (terminalMatches.length !== 1) {
     throw new Error(`Hermes lifecycle renderer completion terminal hook is ambiguous: ${terminalMatches.length}`);
   }
+  if (countOf(source, markerV2) > 1) {
+    throw new Error("Hermes lifecycle renderer completion-finalization V2 marker is ambiguous");
+  }
+
   const terminal = terminalMatches[0];
   const terminalStartInSource = chain.openIndex + 1 + terminal.index;
   const terminalEndInSource = terminalStartInSource + terminal[0].length;
   let removeStart = terminalStartInSource;
   let removeEnd = terminalEndInSource;
+  if (source.includes(markerV2)) {
+    const markerIndex = source.indexOf(markerV2);
+    if (markerIndex < chain.openIndex || markerIndex >= terminalStartInSource || markerIndex + markerV2.length !== terminalStartInSource) {
+      throw new Error("Hermes lifecycle renderer completion-finalization V2 marker is malformed or misplaced");
+    }
+    removeStart = markerIndex;
+  }
   if (source[removeStart - 1] === ",") removeStart -= 1;
   else if (source[removeEnd] === ",") removeEnd += 1;
   else throw new Error("Hermes lifecycle renderer completion terminal hook is not a comma-expression element");
@@ -448,8 +536,7 @@ function upgradeRendererCompletionFinalization(source) {
   if (strippedChain == null) {
     throw new Error("Hermes lifecycle renderer completion success chain disappeared during migration");
   }
-  const hook = `,${marker}${completionNotifyExpression(terminal[1])}`;
-  return stripped.slice(0, strippedChain.closeIndex) + hook + stripped.slice(strippedChain.closeIndex);
+  return insertCompletionFinalizationV3(stripped, strippedChain, terminal[1]);
 }
 
 function upgradeRendererPlainChatLifecycle(source) {
@@ -581,8 +668,7 @@ function patchRendererAsset(source) {
     console.warn("WARN: ChatGPT completion success chain not found uniquely - skipping Hermes lifecycle renderer patch");
     return source;
   }
-  const successHook = `,/*${COMPLETION_FINALIZATION_V2_MARKER}*/${completionNotifyExpression("ie")}`;
-  patched = patched.slice(0, successChain.closeIndex) + successHook + patched.slice(successChain.closeIndex);
+  patched = insertCompletionFinalizationV3(patched, successChain, "ie");
 
   const errorAnchor = "xe=n=>{if(!ve(n.requestId,`failed`))return;";
   if (countOf(patched, errorAnchor) !== 1) {

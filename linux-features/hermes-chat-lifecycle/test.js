@@ -488,7 +488,7 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   assert.match(patched, /\/\*codexLinuxHermesQaFaultControlsV2\*\//);
   assert.match(patched, /!\[`disable_context`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\.qaFault\)/);
   assert.match(patched, /codexLinuxHermesPreflight\?\.qaFault!==`begin_only`\)try\{await globalThis\.electronBridge\?\.hermesChatLifecycle\?\.\(\{phase:`pre_api_request`/);
-  assert.match(patched, /done\(\),\/\*codexLinuxHermesCompletionFinalizationV2\*\/\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`/);
+  assert.match(patched, /\/\*codexLinuxHermesCompletionFinalizationV3\*\/queueMicrotask\(\(\)=>\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`[^)]*\)\),done\(\)\)/);
   assert.match(patched, /xe\(\{error:`qa-injected-model-call-error`/);
   assert.match(patched, /qa-injected-model-call-error/);
   assert.match(patched, /__codexLinuxHermesLifecyclePreflights/);
@@ -553,31 +553,35 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   assert.notEqual(legacyAssistantState, current);
   assert.equal(patchRendererAsset(legacyAssistantState), current);
 
-  const completionTail = current.match(
-    /(done\(\)),\/\*codexLinuxHermesCompletionFinalizationV2\*\/(\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\))/,
+  const completionNotify = "[`suppress_complete`,`begin_only`].includes(codexLinuxHermesPreflight?.qaFault)?void 0:codexLinuxHermesNotify(`complete_turn`,{server_conversation_id:ie})";
+  const completionV3 = `/*codexLinuxHermesCompletionFinalizationV3*/queueMicrotask(()=>${completionNotify}),done()`;
+  assert.ok(current.includes(completionV3));
+
+  const installedV2 = current.replace(
+    completionV3,
+    `done(),/*codexLinuxHermesCompletionFinalizationV2*/${completionNotify}`,
   );
-  assert.ok(completionTail);
-  const midChainCompletion = current.replace(
-    completionTail[0],
-    `${completionTail[2]},${completionTail[1]}`,
-  );
+  assert.notEqual(installedV2, current);
+  assert.equal(patchRendererAsset(installedV2), current);
+
+  const midChainCompletion = current.replace(completionV3, `${completionNotify},done()`);
   assert.notEqual(midChainCompletion, current);
   assert.equal(patchRendererAsset(midChainCompletion), current);
 
-  const misplacedV2 = current.replace(
-    completionTail[0],
-    `/*codexLinuxHermesCompletionFinalizationV2*/${completionTail[2]},${completionTail[1]}`,
+  const malformedV3 = current.replace(
+    completionV3,
+    `/*codexLinuxHermesCompletionFinalizationV3*/${completionNotify},done()`,
   );
   assert.throws(
-    () => patchRendererAsset(misplacedV2),
-    /completion-finalization V2 marker is not at the native success tail/,
+    () => patchRendererAsset(malformedV3),
+    /completion-finalization V3 marker is malformed or misplaced/,
   );
 
-  const oldCompletionOrder = midChainCompletion.replace(
-    `Vfi(t),${completionTail[2]}`,
-    `${completionTail[2]},Vfi(t)`,
+  const oldCompletionOrder = current.replace(
+    `Vfi(t),${completionV3}`,
+    `${completionNotify},Vfi(t),done()`,
   );
-  assert.notEqual(oldCompletionOrder, midChainCompletion);
+  assert.notEqual(oldCompletionOrder, current);
   assert.equal(patchRendererAsset(oldCompletionOrder), current);
   assert.equal(patchRendererAsset(current), current);
 });
@@ -602,7 +606,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
   assert.notEqual(patched, source);
   assert.match(patched, /async function i_i\(e,t,n\)\{let codexLinuxHermesPendingPreflight=/);
   assert.match(patched, /Nqr\(\{scope:e,conversationId:u,streamRequestId:g\}\),codexLinuxHermesPreflightMap\.delete\(u\)/);
-  assert.match(patched, /Gfi\(t\),done\(\),\/\*codexLinuxHermesCompletionFinalizationV2\*\/\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
+  assert.match(patched, /Gfi\(t\),\/\*codexLinuxHermesCompletionFinalizationV3\*\/queueMicrotask\(\(\)=>\[`suppress_complete`,`begin_only`\]\.includes\(codexLinuxHermesPreflight\?\.qaFault\)\?void 0:codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)\),done\(\)\)/);
   assert.match(
     patched,
     /\/\*codexLinuxHermesAssistantStateV2\*\/let c=I2\(e\.get,u\)\?\?u,a=e\.get\(H2,c\),h=e\.get\(X2,c\)\?\?\{\},g=a==null\?null:h\[a\]\?\.message\?\?null;/,
