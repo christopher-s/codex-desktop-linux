@@ -277,13 +277,15 @@ Real installed-runtime QA has verified native reviewer-parent initialization, co
 
 ## Deterministic failure QA
 
-The environment-only control:
+The environment-only control accepts three QA-only values:
 
 ```bash
 CODEX_HERMES_QA_FAULT=model_call_error
+CODEX_HERMES_QA_FAULT=disable_context
+CODEX_HERMES_QA_FAULT=suppress_complete
 ```
 
-causes a registered Hermes Gizmo turn to run `begin_turn` and `pre_api_request`, then route through Codex's real stream-error callback before a real ChatGPT request is started. This is used only for deterministic lifecycle QA. It verifies `api_request_error`, `on_session_end(failed=true)`, renderer error cleanup, and the absence of successful LCM/Hindsight post-turn work.
+`model_call_error` runs `begin_turn` and `pre_api_request`, then routes through Codex's real stream-error callback before a real ChatGPT request is started. `disable_context` keeps the lifecycle active while withholding Hermes system/user context from `extraDeveloperInstructionMessages`. `suppress_complete` keeps `begin_turn`/`pre_api_request` active and lets the native model request finish while suppressing only the renderer's terminal `complete_turn` notification. The latter two modes exist to isolate regular-Chat lifecycle/UI coupling without ad hoc bundle edits. Unsupported values are ignored.
 
 ## Runtime diagnostics
 
