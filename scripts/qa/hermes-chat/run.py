@@ -497,7 +497,7 @@ def command_e1(args: argparse.Namespace) -> int:
     marker_one = f"E1-{suffix}-TURN1"
     marker_two = f"E1-{suffix}-TURN2"
     lifecycle_baseline = lifecycle.baseline()
-    lcm_total_before = lcm.total_messages()
+    lcm_total_before = lcm.total_messages() if lcm.path.is_file() else 0
 
     try:
         app.start(config)
