@@ -21,7 +21,15 @@ import chat
 from computer_use import ComputerUseClient, ComputerUseError
 from evidence import EvidenceRun
 from lcm import LCMDatabase, assert_prefix_unchanged, tool_pairs
-from lifecycle import LifecycleLog, by_session, identity_pairs, session_open_events
+from lifecycle import (
+    LifecycleLog,
+    assert_subsequence,
+    by_session,
+    event_names,
+    failed_events,
+    identity_pairs,
+    session_open_events,
+)
 import recents
 
 
@@ -374,6 +382,294 @@ def _wait_for_tool_pairs(
         rows = lcm.rows(conversation_id)
         pairs = tool_pairs(rows)
     return rows, pairs
+
+
+def _wait_for_rows(
+    lcm: LCMDatabase,
+    conversation_id: str,
+    *,
+    minimum: int,
+    timeout: float = 20.0,
+) -> list:
+    deadline = time.monotonic() + timeout
+    rows = lcm.rows(conversation_id)
+    while len(rows) < minimum and time.monotonic() < deadline:
+        time.sleep(0.25)
+        rows = lcm.rows(conversation_id)
+    return rows
+
+
+def _plain_text_prompt(marker: str) -> str:
+    return (
+        f"{marker} — Reply in plain text with exactly {marker}-ACK. "
+        "Do not call or describe any tools."
+    )
+
+
+async def _e1_two_turns(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    lifecycle: LifecycleLog,
+    baseline,
+    marker_one: str,
+    marker_two: str,
+) -> tuple[str, str]:
+    target = wait_for_shell_target(config.host, config.port)
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        await chat.new_chat(client, timeout=45)
+        for logical_turn, marker_value in enumerate((marker_one, marker_two), start=1):
+            before_events = lifecycle.events_since(baseline)
+            before_tool_count = len(
+                [event for event in before_events if event.get("event") in {"tool_call", "tool_call_error"}]
+            )
+            result = await chat.send_and_wait(
+                client,
+                _plain_text_prompt(marker_value),
+                complete_timeout=300,
+            )
+            if not result.accepted or not result.completed:
+                raise AssertionError(f"E1 turn {logical_turn} did not complete: {result}")
+            after_events = lifecycle.events_since(baseline)
+            new_tools = [
+                event
+                for event in after_events
+                if event.get("event") in {"tool_call", "tool_call_error"}
+            ][before_tool_count:]
+            if new_tools:
+                raise AssertionError(
+                    f"E1 turn {logical_turn} unexpectedly executed a tool: {new_tools}"
+                )
+            shell = await chat.state(client)
+            if shell.get("visibleComposerCount") != 1:
+                raise AssertionError(f"E1 turn {logical_turn} did not return to a composable Chat state: {shell}")
+            run.record(
+                "e1_turn",
+                logical_turn=logical_turn,
+                marker=marker_value,
+                seconds=result.seconds,
+                shell=shell,
+            )
+
+    client_id, server_id, events = await _wait_for_identity_pair(lifecycle, baseline)
+    run.write_json("e1-live-lifecycle.json", events)
+    return client_id, server_id
+
+
+async def _e1_reopen(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    server_id: str,
+    marker_one: str,
+    marker_two: str,
+) -> None:
+    target = wait_for_shell_target(config.host, config.port)
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        row = await recents.open_by_server_id(
+            client,
+            server_id,
+            transcript_marker=marker_one,
+            timeout=180,
+        )
+        transcript = await client.evaluate(
+            "(() => [...document.querySelectorAll('[data-turn-key]')].filter(n=>n.offsetParent!==null).map(n=>n.innerText||n.textContent||'').join('\\n'))()"
+        )
+        transcript_text = str(transcript or "")
+        if marker_one not in transcript_text or marker_two not in transcript_text:
+            raise AssertionError(
+                f"E1 reopened transcript does not contain both turn markers: {transcript_text[-2400:]}"
+            )
+        shell = await chat.wait_for_visible_composer(client, timeout=45)
+        run.record(
+            "e1_reopened",
+            server_conversation_id=server_id,
+            row=row,
+            shell=shell,
+            transcript_tail=transcript_text[-2400:],
+        )
+
+
+def command_e1(args: argparse.Namespace) -> int:
+    config = app.QAAppConfig()
+    lifecycle = LifecycleLog()
+    lcm = LCMDatabase()
+    run = EvidenceRun("e1-no-tool-lifecycle")
+    suffix = uuid.uuid4().hex[:10]
+    marker_one = f"E1-{suffix}-TURN1"
+    marker_two = f"E1-{suffix}-TURN2"
+    lifecycle_baseline = lifecycle.baseline()
+    lcm_total_before = lcm.total_messages()
+
+    try:
+        app.start(config)
+        run.record("e1_app_started", service=app.service_snapshot(config))
+        client_id, server_id = asyncio.run(
+            _e1_two_turns(
+                run,
+                config,
+                lifecycle,
+                lifecycle_baseline,
+                marker_one,
+                marker_two,
+            )
+        )
+
+        events = lifecycle.events_since(lifecycle_baseline)
+        pairs = identity_pairs(events)
+        if (client_id, server_id) not in pairs:
+            raise AssertionError(f"E1 canonical/server identity pair missing: {pairs}")
+        opens = [
+            event
+            for event in session_open_events(events)
+            if event.get("conversation_id") == client_id
+        ]
+        if len(opens) != 1:
+            raise AssertionError(f"E1 expected exactly one session_open for {client_id}, found {opens}")
+        session_id = str(opens[0].get("session_id") or "")
+        expected_task_id = f"chatgpt-codex:{client_id}"
+        if str(opens[0].get("task_id") or "") != expected_task_id:
+            raise AssertionError(
+                f"E1 task identity mismatch: expected {expected_task_id}, got {opens[0].get('task_id')}"
+            )
+        session_events = by_session(events).get(session_id, [])
+        tool_events = [
+            event
+            for event in session_events
+            if event.get("event") in {"tool_call", "tool_call_error"}
+        ]
+        if tool_events:
+            raise AssertionError(f"E1 produced tool lifecycle events: {tool_events}")
+        failures = failed_events(session_events)
+        if failures:
+            raise AssertionError(f"E1 lifecycle failure events: {failures}")
+
+        begin_events = [event for event in session_events if event.get("event") == "begin_turn"]
+        if len(begin_events) != 2:
+            raise AssertionError(f"E1 expected two begin_turn events, found {begin_events}")
+        expected_order = [
+            "begin_turn",
+            "pre_api_request",
+            "post_api_request",
+            "on_session_end",
+            "complete_turn",
+        ]
+        turn_evidence = []
+        for begin in begin_events:
+            turn_id = str(begin.get("turn_id") or "")
+            turn_events = [event for event in session_events if str(event.get("turn_id") or "") == turn_id]
+            names = event_names(turn_events)
+            assert_subsequence(names, expected_order)
+            for event_name in expected_order:
+                if names.count(event_name) != 1:
+                    raise AssertionError(
+                        f"E1 turn {turn_id} expected one {event_name}, got {names.count(event_name)}; names={names}"
+                    )
+            errors = []
+            for event in turn_events:
+                for key, value in event.items():
+                    if (key == "error" or key.endswith("_error")) and value not in (None, "", False):
+                        errors.append({"event": event.get("event"), "field": key, "value": value})
+            if errors:
+                raise AssertionError(f"E1 turn {turn_id} lifecycle errors: {errors}")
+            turn_evidence.append({"turn_id": turn_id, "events": names})
+        run.record(
+            "e1_lifecycle_acceptance",
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+            session_id=session_id,
+            task_id=expected_task_id,
+            turns=turn_evidence,
+            tool_events=0,
+        )
+
+        app.stop(config)
+        rows = _wait_for_rows(lcm, client_id, minimum=4)
+        server_rows = lcm.rows(server_id)
+        if len(rows) != 4:
+            raise AssertionError(f"E1 expected four finalized user/assistant rows, found {len(rows)}")
+        roles = [row.role for row in rows]
+        if roles != ["user", "assistant", "user", "assistant"]:
+            raise AssertionError(f"E1 finalized row roles are unexpected: {roles}")
+        tool_rows = [
+            row
+            for row in rows
+            if row.role == "tool" or row.tool_call_id is not None or row.tool_name is not None
+        ]
+        if tool_rows:
+            raise AssertionError(f"E1 created tool rows: {tool_rows}")
+        if server_rows:
+            raise AssertionError(f"E1 wrote {len(server_rows)} rows under bare server UUID {server_id}")
+        row_sessions = sorted({row.session_id for row in rows if row.session_id})
+        if row_sessions != [session_id]:
+            raise AssertionError(f"E1 finalized rows span unexpected lifecycle sessions: {row_sessions}")
+        integrity = lcm.integrity()
+        if integrity.get("integrity_check") != "ok" or integrity.get("foreign_key_violations"):
+            raise AssertionError(f"LCM integrity failure after E1: {integrity}")
+        if not integrity.get("fts_matches_messages"):
+            raise AssertionError(f"LCM FTS/message mismatch after E1: {integrity}")
+        if lcm.total_messages() - lcm_total_before != 4:
+            raise AssertionError(
+                f"E1 expected global isolated LCM delta 4, got {lcm.total_messages() - lcm_total_before}"
+            )
+        run.write_json("e1-finalized-rows.json", [row.__dict__ for row in rows])
+        run.record(
+            "e1_finalized",
+            rows=len(rows),
+            roles=roles,
+            tool_rows=0,
+            server_key_rows=len(server_rows),
+            lcm_total_delta=lcm.total_messages() - lcm_total_before,
+            integrity=integrity,
+        )
+
+        reopen_baseline = lifecycle.baseline()
+        app.start(config)
+        asyncio.run(_e1_reopen(run, config, server_id, marker_one, marker_two))
+        reopen_events = lifecycle.events_since(reopen_baseline)
+        run.write_json("e1-reopen-lifecycle.json", reopen_events)
+        unexpected_reopen_turns = [
+            event
+            for event in reopen_events
+            if event.get("event") in {"begin_turn", "pre_api_request", "tool_call", "complete_turn"}
+        ]
+        if unexpected_reopen_turns:
+            raise AssertionError(
+                f"E1 read-only reopen unexpectedly created a lifecycle turn/tool call: {unexpected_reopen_turns}"
+            )
+        app.stop(config)
+        rows_after_reopen = lcm.rows(client_id)
+        if rows_after_reopen != rows:
+            raise AssertionError("E1 read-only reopen changed finalized canonical rows")
+        final_integrity = lcm.integrity()
+        if final_integrity.get("integrity_check") != "ok" or final_integrity.get("foreign_key_violations"):
+            raise AssertionError(f"LCM integrity failure after E1 reopen: {final_integrity}")
+        if not final_integrity.get("fts_matches_messages"):
+            raise AssertionError(f"LCM FTS/message mismatch after E1 reopen: {final_integrity}")
+        run.record(
+            "e1_postconditions",
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+            session_id=session_id,
+            task_id=expected_task_id,
+            rows=len(rows_after_reopen),
+            tool_rows=0,
+            server_key_rows=len(lcm.rows(server_id)),
+            reopen_lifecycle_events=len(reopen_events),
+            integrity=final_integrity,
+        )
+    except Exception as exc:
+        try:
+            if not app.unit_is_active(config):
+                app.start(config)
+        except Exception:
+            pass
+        run.finish("FAIL", error=f"{type(exc).__name__}: {exc}")
+        print(json.dumps({"verdict": "FAIL", "run": str(run.directory), "error": str(exc)}, indent=2))
+        return 1
+
+    app.start(config)
+    run.finish("PASS")
+    print(json.dumps({"verdict": "PASS", "run": str(run.directory)}, indent=2))
+    return 0
 
 
 async def _e5_turns(
@@ -741,6 +1037,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sanity_parser = subparsers.add_parser("sanity", help="run E0 CDP + Computer Use harness sanity")
     sanity_parser.set_defaults(func=command_sanity)
+
+    e1_parser = subparsers.add_parser("e1", help="run E1 no-tool plain-Chat lifecycle + restart/reopen")
+    e1_parser.set_defaults(func=command_e1)
 
     e5_parser = subparsers.add_parser("e5", help="run E5 same-process conversation/session reuse")
     e5_parser.set_defaults(func=command_e5)
