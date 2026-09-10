@@ -87,6 +87,12 @@ test("probe exposes only supported lifecycle QA fault modes", async () => {
     assert.equal(probe.enabled, true);
     assert.equal(probe.qa_fault, mode);
   }
+  {
+    const { api } = manifestHarness({ CODEX_HERMES_QA_FAULT: "identity_only" });
+    const probe = JSON.parse(JSON.stringify(await api.invoke({ phase: "probe" })));
+    assert.equal(probe.enabled, false);
+    assert.equal(probe.qa_fault, "identity_only");
+  }
   const { api } = manifestHarness({ CODEX_HERMES_QA_FAULT: "unsupported" });
   const probe = JSON.parse(JSON.stringify(await api.invoke({ phase: "probe" })));
   assert.equal(probe.qa_fault, null);
@@ -361,6 +367,7 @@ test("main patch registers a trusted dedicated lifecycle IPC handler and is idem
   assert.match(patched, /codexLinuxHermesLifecycleInvoke/);
   assert.ok(patched.includes(`ipcMain.handle(\`${IPC_CHANNEL}\``));
   assert.match(patched, /if\(!n\(e\)\)return\{ok:!1,enabled:!1,error:`untrusted-ipc`\}/);
+  assert.match(patched, /q===`identity_only`\)return\{ok:!0,enabled:!1,phase:`probe`,qa_fault:q\}/);
   assert.match(patched, /\[`model_call_error`,`disable_context`,`suppress_complete`,`begin_only`\]\.includes\(q\)\?q:null/);
   assert.match(patched, /r\.phase===`close_session`&&a\?\.ok===!0/);
   assert.match(patched, /e\.phase===`conversation_identity`/);

@@ -135,7 +135,7 @@ async function codexLinuxHermesLifecycleInvoke(e){
   }
   let t=typeof e.gizmo_id===\`string\`?e.gizmo_id:\`\`,n=codexLinuxHermesAllowedGizmos();
   if(t&&!n.has(t))return{ok:!0,enabled:!1,reason:\`gizmo-not-registered\`};
-  if(e.phase===\`probe\`){let q=process.env.CODEX_HERMES_QA_FAULT;return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:[\`model_call_error\`,\`disable_context\`,\`suppress_complete\`,\`begin_only\`].includes(q)?q:null}}
+  if(e.phase===\`probe\`){let q=process.env.CODEX_HERMES_QA_FAULT;if(q===\`identity_only\`)return{ok:!0,enabled:!1,phase:\`probe\`,qa_fault:q};return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:[\`model_call_error\`,\`disable_context\`,\`suppress_complete\`,\`begin_only\`].includes(q)?q:null}}
   let r={...e},i=codexLinuxHermesLifecycleKey(r);
   if(r.phase===\`begin_turn\`){
     if(i==null)return{ok:!1,enabled:!1,error:\`missing-conversation-identity\`};
