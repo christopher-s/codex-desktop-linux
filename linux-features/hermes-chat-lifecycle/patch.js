@@ -29,7 +29,7 @@ function codexLinuxHermesAllowedGizmos(){
   let e=String(process.env.CODEX_HERMES_GIZMO_IDS||\`\`);if(e.trim())return new Set(e.split(\`,\`).map(e=>e.trim()).filter(codexLinuxHermesValidGizmoId));
   let t=codexLinuxHermesRegistrationManifestPath();try{let e=require(\`node:fs\`);if(!e.existsSync(t))return new Set;let i=e.statSync(t);if(!i.isFile()||i.size>262144)throw new Error(\`invalid-registration-manifest-file\`);let n=JSON.parse(e.readFileSync(t,\`utf8\`));if(n==null||typeof n!==\`object\`||Array.isArray(n)||n.version!==1||n.gizmos==null||typeof n.gizmos!==\`object\`||Array.isArray(n.gizmos))throw new Error(\`invalid-registration-manifest\`);let r=[];for(let[e,t]of Object.entries(n.gizmos))codexLinuxHermesValidGizmoId(e)&&t!=null&&typeof t===\`object\`&&!Array.isArray(t)&&(t.enabled===void 0||t.enabled===!0)&&r.push(e);return new Set(r)}catch(e){return process.env.CODEX_HERMES_LIFECYCLE_DEBUG===\`1\`&&console.warn(\`[hermes-chat-lifecycle] registration manifest rejected:\`,String(e?.message||e)),new Set}
 }
-function codexLinuxHermesLifecycleKey(e){let t=String(e?.gizmo_id||\`\`),n=String(e?.client_conversation_id||e?.conversation_id||\`\`);return t&&n?\`${"${t}"}\\0${"${n}"}\`:null}
+function codexLinuxHermesLifecycleKey(e){let t=String(e?.gizmo_id||\`\`),n=String(e?.client_conversation_id||e?.conversation_id||\`\`);if(!n)return null;return t?\`${"${t}"}\\0${"${n}"}\`:\`chat\\0${"${n}"}\`}
 function codexLinuxHermesRejectHostPending(e){for(let[,t]of codexLinuxHermesHostPending){clearTimeout(t.timer),t.resolve({ok:!1,enabled:!1,error:e})}codexLinuxHermesHostPending.clear()}
 function codexLinuxHermesEnsureHost(){
   if(codexLinuxHermesHost&&codexLinuxHermesHost.exitCode==null&&!codexLinuxHermesHost.killed)return codexLinuxHermesHost;
@@ -58,7 +58,7 @@ async function codexLinuxHermesLifecycleInvoke(e){
   if(e.phase===\`conversation_identity\`){
     let r={...e},cn=String(r.client_conversation_id||\`\`);
     if(!cn)return{ok:!1,enabled:!1,error:\`missing-conversation-identity\`};
-    let k=\`tool\\0${"${cn}"}\`,s=codexLinuxHermesLifecycleSessions.get(k);
+    let k=codexLinuxHermesLifecycleKey({client_conversation_id:cn}),s=codexLinuxHermesLifecycleSessions.get(k);
     s??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
     codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId;
     return await codexLinuxHermesHostRequest(r);
@@ -67,14 +67,14 @@ async function codexLinuxHermesLifecycleInvoke(e){
     let r={...e},cn=String(r.client_conversation_id||r.conversation_id||\`\`);
     if(cn){r.client_conversation_id=cn;r.conversation_id=cn}
     if(typeof r.session_id!==\`string\`||r.session_id.length===0||r.session_id.indexOf(\`hs_codex_\`)!==0){
-      let k=\`tool\\0${"${cn}"}\`,s=codexLinuxHermesLifecycleSessions.get(k);
+      let k=codexLinuxHermesLifecycleKey({client_conversation_id:cn}),s=codexLinuxHermesLifecycleSessions.get(k);
       s??={sessionId:\`hs_codex_${"${require(\"node:crypto\").randomUUID().replaceAll(\"-\",\"\")}"}\`,turnCount:0};
       codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId;
     }
     return await codexLinuxHermesHostRequest(r);
   }
   let t=typeof e.gizmo_id===\`string\`?e.gizmo_id:\`\`,n=codexLinuxHermesAllowedGizmos();
-  if(!t||!n.has(t))return{ok:!0,enabled:!1,reason:\`gizmo-not-registered\`};
+  if(t&&!n.has(t))return{ok:!0,enabled:!1,reason:\`gizmo-not-registered\`};
   if(e.phase===\`probe\`)return{ok:!0,enabled:!0,phase:\`probe\`,qa_fault:process.env.CODEX_HERMES_QA_FAULT===\`model_call_error\`?\`model_call_error\`:null};
   let r={...e},i=codexLinuxHermesLifecycleKey(r);
   if(r.phase===\`begin_turn\`){
@@ -161,7 +161,7 @@ function patchRendererAsset(source) {
     `codexLinuxHermesNotify=(n,i={})=>{if(${RENDERER_MARKER}?.enabled!==!0||codexLinuxHermesTerminalSent)return;codexLinuxHermesTerminalSent=!0,codexLinuxHermesPreflightMap.delete(u);` +
     `let a=e.get(Qz,u),h=e.get(nB,u)??{},g=a==null?null:h[a]?.message??null;` +
     `globalThis.electronBridge?.hermesChatLifecycle?.({phase:n,session_id:${RENDERER_MARKER}.session_id,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),assistant_message:codexLinuxHermesMessageText(g),model:r,...i}).catch(()=>{})};` +
-    `if(o?.author.role===\`user\`&&typeof ${projectVar}===\`string\`&&${projectVar}.length>0)try{` +
+    `if(o?.author.role===\`user\`)try{` +
     `let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`probe\`,gizmo_id:${projectVar}});if(q?.enabled===!0){` +
     `codexLinuxHermesPreflight={cancelled:!1,started:!1,qaFault:q.qa_fault??null},codexLinuxHermesPreflightMap.set(u,codexLinuxHermesPreflight);` +
     `let n=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:\`begin_turn\`,gizmo_id:${projectVar},conversation_id:d??u,client_conversation_id:u,turn_id:s,user_message:codexLinuxHermesMessageText(o),model:r});` +

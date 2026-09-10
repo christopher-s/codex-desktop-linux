@@ -1,8 +1,8 @@
 # Hermes Chat Lifecycle
 
-Opt-in Codex Desktop integration that surrounds eligible ChatGPT Custom GPT turns with native Hermes lifecycle behavior while ChatGPT remains the foreground conversational model.
+Opt-in Codex Desktop integration that surrounds eligible ChatGPT turns with native Hermes lifecycle behavior while ChatGPT remains the foreground conversational model.
 
-The feature is disabled by default and is intentionally scoped to exact registered Custom GPT/Gizmo IDs.
+The feature is disabled by default. When enabled, project-less ordinary Chat turns are eligible directly; non-empty Custom GPT/Gizmo IDs remain eligible only when explicitly registered.
 
 Architecture and roadmap: [`../../docs/hermes-chat-lifecycle-plan.md`](../../docs/hermes-chat-lifecycle-plan.md)\
 Verified implementation and QA record: [`../../docs/hermes-chat-lifecycle-status.md`](../../docs/hermes-chat-lifecycle-status.md)
@@ -46,16 +46,16 @@ For development only, the comma-separated environment override still has explici
 CODEX_HERMES_GIZMO_IDS=g-abc12345,g-def67890
 ```
 
-When that override is non-empty, invalid IDs are filtered and the manifest is not used as a fallback. An absent manifest and absent override leave the lifecycle inert even when its ASAR patches are enabled.
+When that override is non-empty, invalid IDs are filtered and the manifest is not used as a fallback. Registration controls only non-empty Custom GPT/Gizmo identities; project-less ordinary Chat does not require a manifest entry.
 
-The renderer performs a fast `probe` through trusted main-process IPC before creating any Hermes preflight state. Ordinary ChatGPT, unregistered Custom GPTs, Codex task mode, and unrelated webviews therefore keep their normal behavior.
+The renderer performs a fast `probe` through trusted main-process IPC before creating any Hermes preflight state. Project-less ordinary Chat probes are eligible when the feature is enabled. Non-empty Custom GPT/Gizmo IDs still fail closed unless registered, and unrelated webviews keep their normal behavior.
 
 ## What the feature currently does
 
 The feature patches three Codex layers:
 
 - **Electron preload** — exposes `electronBridge.hermesChatLifecycle(request)`;
-- **Electron main process** — validates trusted IPC senders, enforces manifest/env Gizmo registration, binds Codex conversations to lifecycle sessions, and hosts a persistent Hermes helper process;
+- **Electron main process** — validates trusted IPC senders, allows project-less ordinary Chat directly, enforces manifest/env registration for non-empty Gizmo IDs, binds canonical conversations to lifecycle sessions, and hosts a persistent Hermes helper process;
 - **ChatGPT webview turn orchestrator** — runs Hermes lifecycle before the observable ChatGPT request, injects the provider system block at system authority and recalled/plugin context at hidden user authority, and reports success/error/interruption terminal states.
 
 The persistent Python helper imports the locally installed Hermes Agent runtime directly. It does not contact or modify the `hermes-chatgpt` bridge.
@@ -65,7 +65,7 @@ The persistent Python helper imports the locally installed Hermes Agent runtime 
 Successful turn:
 
 ```text
-Gizmo probe
+Chat/Gizmo probe
   -> session open/reuse
   -> Hindsight MemoryManager.on_turn_start
   -> Hindsight provider system prompt + prefetch
@@ -184,13 +184,13 @@ renderer → electronBridge.hermesChatLifecycle({
 Main process:
 
 - `tool_call` bypasses the gizmo-registration gate (it is keyed by the
-  conversation, not a gizmo) and auto-creates a process-local
-  `hs_codex_<uuid>` session keyed by `tool\0<conversation_id>`, so a bare
-  `conversationId` is sufficient. A payload `session_id` that is missing or
-  not a canonical `hs_codex_*` id (for example a raw conversation id) is
-  re-mapped onto that conversation-keyed session, so the host never stores a
-  conversation id as a session id and tool turns merge into the
-  conversation's lifecycle `SessionRuntime`.
+  conversation, not a gizmo) and reuses the same process-local plain-Chat
+  lifecycle binding keyed by `chat\0<conversation_id>`. If no lifecycle turn
+  has opened yet, the binding is created lazily as `hs_codex_<uuid>`. A
+  payload `session_id` that is missing or not a canonical `hs_codex_*` id
+  (for example a raw conversation id) is re-mapped onto that shared
+  conversation-keyed session, so identity observation, model lifecycle, and
+  tool dispatch converge on one `SessionRuntime`.
 
 Host:
 

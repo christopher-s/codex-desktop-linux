@@ -80,6 +80,57 @@ test("fresh plain-Chat identity provisions its session before the first tool cal
   assert.equal(toolCall.session_id, identity.session_id);
 });
 
+test("project-less plain Chat lifecycle reuses one canonical session across model and tool phases", async () => {
+  const { api } = manifestHarness();
+  api.stubHost();
+  const localId = "local-chatgpt:33333333-3333-4333-8333-333333333333";
+
+  const probe = await api.invoke({ phase: "probe" });
+  assert.equal(probe.enabled, true, JSON.stringify(probe));
+
+  const begin = await api.invoke({
+    phase: "begin_turn",
+    client_conversation_id: localId,
+    conversation_id: localId,
+    turn_id: "turn-plain-1",
+    user_message: "hello",
+  });
+  assert.equal(begin.enabled, true, JSON.stringify(begin));
+  assert.match(begin.session_id, /^hs_codex_[0-9a-f]{32}$/);
+
+  const pre = await api.invoke({
+    phase: "pre_api_request",
+    client_conversation_id: localId,
+    conversation_id: localId,
+    turn_id: "turn-plain-1",
+  });
+  assert.equal(pre.session_id, begin.session_id);
+
+  const tool = await api.invoke({
+    phase: "tool_call",
+    client_conversation_id: localId,
+    conversation_id: localId,
+    name: "hermes_tool_search",
+  });
+  assert.equal(tool.session_id, begin.session_id);
+
+  const complete = await api.invoke({
+    phase: "complete_turn",
+    client_conversation_id: localId,
+    conversation_id: localId,
+    turn_id: "turn-plain-1",
+    assistant_message: "done",
+  });
+  assert.equal(complete.session_id, begin.session_id);
+
+  const unregisteredGizmo = await api.invoke({
+    phase: "probe",
+    gizmo_id: "g-unregistered_123",
+  });
+  assert.equal(unregisteredGizmo.enabled, false);
+  assert.equal(unregisteredGizmo.reason, "gizmo-not-registered");
+});
+
 function isolatedHermesPythonEnv(overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -279,7 +330,7 @@ test("main patch registers a trusted dedicated lifecycle IPC handler and is idem
   assert.match(patched, /CODEX_HERMES_QA_FAULT===`model_call_error`/);
   assert.match(patched, /r\.phase===`close_session`&&a\?\.ok===!0/);
   assert.match(patched, /e\.phase===`conversation_identity`/);
-  assert.ok(patched.includes('let k=`tool\\0${cn}`,s=codexLinuxHermesLifecycleSessions.get(k)'));
+  assert.ok(patched.includes('let k=codexLinuxHermesLifecycleKey({client_conversation_id:cn}),s=codexLinuxHermesLifecycleSessions.get(k)'));
   assert.ok(patched.includes('codexLinuxHermesLifecycleSessions.set(k,s),r.session_id=s.sessionId'));
   assert.match(patched, /codexLinuxHermesLifecycleSessions\.delete/);
   new vm.Script(patched);
@@ -323,6 +374,8 @@ test("renderer patch injects begin and terminal lifecycle calls into user ChatGP
   const patched = applyTwice(patchRendererAsset, source);
   assert.match(patched, /phase:`probe`/);
   assert.match(patched, /phase:`begin_turn`/);
+  assert.match(patched, /if\(o\?\.author\.role===`user`\)try\{/);
+  assert.doesNotMatch(patched, /o\?\.author\.role===`user`&&typeof m===`string`&&m\.length>0/);
   assert.match(patched, /phase:`pre_api_request`/);
   assert.match(patched, /codexLinuxHermesMessageText=m=>/);
   assert.match(patched, /user_message:codexLinuxHermesMessageText\(o\)/);
