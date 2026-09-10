@@ -444,6 +444,17 @@ test("renderer patch upgrades project-gated and unversioned plain-Chat lifecycle
   const unversioned = current.replace(marker, "");
   assert.notEqual(unversioned, current);
   assert.equal(patchRendererAsset(unversioned), current);
+
+  const completionOrder = current.match(
+    /([A-Za-z_$][\w$]*)\(t\),codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/,
+  );
+  assert.ok(completionOrder);
+  const oldCompletionOrder = current.replace(
+    completionOrder[0],
+    `codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:ie}),${completionOrder[1]}(t)`,
+  );
+  assert.notEqual(oldCompletionOrder, current);
+  assert.equal(patchRendererAsset(oldCompletionOrder), current);
   assert.equal(patchRendererAsset(current), current);
 });
 
@@ -464,7 +475,7 @@ test("renderer patch follows current upstream minified identifiers structurally"
   assert.notEqual(patched, source);
   assert.match(patched, /async function i_i\(e,t,n\)\{let codexLinuxHermesPendingPreflight=/);
   assert.match(patched, /Nqr\(\{scope:e,conversationId:u,streamRequestId:g\}\),codexLinuxHermesPreflightMap\.delete\(u\)/);
-  assert.match(patched, /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\),Gfi\(t\)/);
+  assert.match(patched, /Gfi\(t\),codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:ie\}\)/);
 });
 
 test("renderer patch leaves unrelated assets unchanged", () => {

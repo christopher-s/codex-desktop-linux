@@ -154,29 +154,52 @@ function patchPreload(extractedDir) {
   return { matched: 1, changed: 1, reason: null, target: path.relative(extractedDir, preloadPath) };
 }
 
+function upgradeRendererCompletionOrdering(source) {
+  const oldOrder = /codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)/gu;
+  const oldMatches = [...source.matchAll(oldOrder)];
+  if (oldMatches.length === 1) {
+    const match = oldMatches[0];
+    const replacement = `${match[2]}(${match[3]}),codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:${match[1]}})`;
+    return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
+  }
+  if (oldMatches.length > 1) {
+    throw new Error(`Hermes lifecycle renderer old completion ordering is ambiguous: ${oldMatches.length}`);
+  }
+  const currentOrder = /([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),codexLinuxHermesNotify\(`complete_turn`,\{server_conversation_id:([A-Za-z_$][\w$]*)\}\)/gu;
+  const currentMatches = [...source.matchAll(currentOrder)];
+  if (currentMatches.length !== 1) {
+    throw new Error(`Hermes lifecycle renderer marker exists without one completion ordering anchor: ${currentMatches.length}`);
+  }
+  return source;
+}
+
 function upgradeRendererPlainChatLifecycle(source) {
   if (!source.includes(`let ${RENDERER_MARKER}=null`)) return source;
-  if (source.includes(`/*${PLAIN_CHAT_RENDERER_MARKER}*/`)) return source;
-  const probeLookahead = "let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:`probe`";
-  const legacyGate = /if\(o\?\.author\.role===`user`&&typeof ([A-Za-z_$][\w$]*)===`string`&&\1\.length>0\)try\{/gu;
-  const legacyMatches = [...source.matchAll(legacyGate)].filter((match) => source.startsWith(probeLookahead, match.index + match[0].length));
-  if (legacyMatches.length === 1) {
-    const match = legacyMatches[0];
-    return source.slice(0, match.index) + `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/` + source.slice(match.index + match[0].length);
+  let upgraded = source;
+  if (!upgraded.includes(`/*${PLAIN_CHAT_RENDERER_MARKER}*/`)) {
+    const probeLookahead = "let q=await globalThis.electronBridge?.hermesChatLifecycle?.({phase:`probe`";
+    const legacyGate = /if\(o\?\.author\.role===`user`&&typeof ([A-Za-z_$][\w$]*)===`string`&&\1\.length>0\)try\{/gu;
+    const legacyMatches = [...upgraded.matchAll(legacyGate)].filter((match) => upgraded.startsWith(probeLookahead, match.index + match[0].length));
+    if (legacyMatches.length === 1) {
+      const match = legacyMatches[0];
+      upgraded = upgraded.slice(0, match.index) + `if(o?.author.role===\`user\`)try{/*${PLAIN_CHAT_RENDERER_MARKER}*/` + upgraded.slice(match.index + match[0].length);
+    } else {
+      if (legacyMatches.length > 1) {
+        throw new Error(`Hermes lifecycle renderer legacy plain-Chat gate is ambiguous: ${legacyMatches.length}`);
+      }
+      const currentGate = "if(o?.author.role===`user`)try{";
+      const currentMatches = [];
+      for (let at = upgraded.indexOf(currentGate); at >= 0; at = upgraded.indexOf(currentGate, at + currentGate.length)) {
+        if (upgraded.startsWith(probeLookahead, at + currentGate.length)) currentMatches.push(at);
+      }
+      if (currentMatches.length !== 1) {
+        throw new Error(`Hermes lifecycle renderer marker exists without one plain-Chat gate: ${currentMatches.length}`);
+      }
+      const at = currentMatches[0];
+      upgraded = upgraded.slice(0, at) + `${currentGate}/*${PLAIN_CHAT_RENDERER_MARKER}*/` + upgraded.slice(at + currentGate.length);
+    }
   }
-  if (legacyMatches.length > 1) {
-    throw new Error(`Hermes lifecycle renderer legacy plain-Chat gate is ambiguous: ${legacyMatches.length}`);
-  }
-  const currentGate = "if(o?.author.role===`user`)try{";
-  const currentMatches = [];
-  for (let at = source.indexOf(currentGate); at >= 0; at = source.indexOf(currentGate, at + currentGate.length)) {
-    if (source.startsWith(probeLookahead, at + currentGate.length)) currentMatches.push(at);
-  }
-  if (currentMatches.length !== 1) {
-    throw new Error(`Hermes lifecycle renderer marker exists without one plain-Chat gate: ${currentMatches.length}`);
-  }
-  const at = currentMatches[0];
-  return source.slice(0, at) + `${currentGate}/*${PLAIN_CHAT_RENDERER_MARKER}*/` + source.slice(at + currentGate.length);
+  return upgradeRendererCompletionOrdering(upgraded);
 }
 
 function patchRendererAsset(source) {
@@ -266,7 +289,7 @@ function patchRendererAsset(source) {
   const success = successMatches[0];
   patched = patched.replace(
     success[0],
-    `${success[1]}=${success[2]}=>{${success[3]}(${success[2]},\`completed\`)&&(codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:ie}),${success[4]}(${success[2]}),`,
+    `${success[1]}=${success[2]}=>{${success[3]}(${success[2]},\`completed\`)&&(${success[4]}(${success[2]}),codexLinuxHermesNotify(\`complete_turn\`,{server_conversation_id:ie}),`,
   );
 
   const errorAnchor = "xe=n=>{if(!ve(n.requestId,`failed`))return;";
