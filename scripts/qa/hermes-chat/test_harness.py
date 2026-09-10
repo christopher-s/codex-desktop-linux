@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from app import sh_quote, transient_environment_args
+from app import QAAppConfig, launch_arguments, sh_quote, transient_environment_args
 from cdp_client import CDPError, CDPTarget, select_shell_target
 from chat import _draft_expression
 from lifecycle import identity_pairs
@@ -210,6 +210,19 @@ class AppEnvironmentTests(unittest.TestCase):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+    def test_launch_arguments_include_optional_isolated_user_data_dir(self) -> None:
+        config = QAAppConfig(user_data_dir=Path("/tmp/codex qa profile"), port=9555)
+        self.assertEqual(
+            launch_arguments(config),
+            [
+                "--no-sandbox",
+                "--force-renderer-accessibility",
+                "--remote-debugging-port=9555",
+                "--remote-allow-origins=http://127.0.0.1:9555",
+                "--user-data-dir=/tmp/codex qa profile",
+            ],
+        )
 
 
 class ShellQuoteTests(unittest.TestCase):

@@ -28,6 +28,7 @@ Environment overrides:
 - `CODEX_HERMES_QA_UNIT`
 - `CODEX_HERMES_QA_CDP_HOST`
 - `CODEX_HERMES_QA_CDP_PORT`
+- `CODEX_HERMES_QA_USER_DATA_DIR` — optional isolated Chromium/Electron profile root passed as `--user-data-dir`. Use a disposable copy of the logged-in Codex profile when the normal desktop app is running so QA does not collide with its Chromium singleton. The harness does not create or delete this directory automatically.
 - `CODEX_HERMES_QA_LIFECYCLE_LOG`
 - `CODEX_HERMES_QA_LCM_DB`
 - `LCM_DATABASE_PATH` — forwarded explicitly into transient QA Electron units so the lifecycle helper can use an isolated LCM database across app restarts. The explicit QA-only controls `CODEX_HERMES_QA_FAULT`, `CODEX_HERMES_QA_FAST_BEGIN`, `CODEX_HERMES_QA_FAST_IDENTITY`, and `CODEX_HERMES_QA_SESSION_INIT` are also forwarded so diagnostic runs use the same port-release-safe launcher. `HERMES_HOME` and unrelated caller environment remain excluded. For isolated LCM runs, point both `LCM_DATABASE_PATH` and `CODEX_HERMES_QA_LCM_DB` at the same writable copy, and use a dedicated `CODEX_HERMES_QA_UNIT` so no existing transient unit can carry stale environment.

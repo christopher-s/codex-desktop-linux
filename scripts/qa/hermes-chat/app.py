@@ -18,6 +18,11 @@ class QAAppConfig:
     unit: str = os.environ.get("CODEX_HERMES_QA_UNIT", "codex-hermes-qa")
     host: str = os.environ.get("CODEX_HERMES_QA_CDP_HOST", "127.0.0.1")
     port: int = int(os.environ.get("CODEX_HERMES_QA_CDP_PORT", "9243"))
+    user_data_dir: Path | None = (
+        Path(os.environ["CODEX_HERMES_QA_USER_DATA_DIR"])
+        if os.environ.get("CODEX_HERMES_QA_USER_DATA_DIR")
+        else None
+    )
 
     @property
     def origin(self) -> str:
@@ -49,6 +54,18 @@ def transient_environment_args() -> list[str]:
         value = os.environ.get(key)
         if value:
             args.append(f"--setenv={key}={value}")
+    return args
+
+
+def launch_arguments(config: QAAppConfig) -> list[str]:
+    args = [
+        "--no-sandbox",
+        "--force-renderer-accessibility",
+        f"--remote-debugging-port={config.port}",
+        f"--remote-allow-origins={config.origin}",
+    ]
+    if config.user_data_dir is not None:
+        args.append(f"--user-data-dir={config.user_data_dir}")
     return args
 
 
@@ -107,12 +124,8 @@ def start(config: QAAppConfig, timeout: float = 90.0) -> None:
 
     # The transient unit may have been collected after a previous stop. Recreate
     # it outside the Hermes bridge service cgroup.
-    command = (
-        f"cd {sh_quote(str(config.app_dir))} && exec ./start.sh --no-sandbox "
-        f"--force-renderer-accessibility "
-        f"--remote-debugging-port={config.port} "
-        f"--remote-allow-origins={config.origin}"
-    )
+    launch_args = " ".join(sh_quote(arg) for arg in launch_arguments(config))
+    command = f"cd {sh_quote(str(config.app_dir))} && exec ./start.sh {launch_args}"
     _run(
         [
             "systemd-run",
