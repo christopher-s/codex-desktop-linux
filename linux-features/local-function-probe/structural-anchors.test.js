@@ -137,7 +137,13 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
   assert.match(patched, /codexP2ToolViewerRuntime/);
   assert.match(patched, /codexP2ToolCompletedPresentationV2Runtime/);
   assert.match(patched, /codexP2CompletedSourceToolCardV1Runtime/);
+  assert.match(patched, /codexLinuxChatBridgeToolCallsSkipRuntime/);
   assert.doesNotMatch(patched, /codexP2ToolCompletedPresentationRuntime/);
+  assert.doesNotMatch(
+    patched,
+    /\|\|[\w$]+\.type===`dynamic-tool-call`\)continue;/,
+    "regular Chat activity renderer does not drop dynamic tool items before Lm",
+  );
   assert.match(
     patched,
     /\/\*codexP2CompletedSourceToolCardV1Runtime\*\/if\(([\w$]+)\.sourceTool&&\1\.completed&&\1\.result\?\.accepted===!0&&typeof \1\.result\.thread_id===`string`&&\1\.result\.thread_id\.length>0\)return\(0,([\w$]+)\.jsx\)\(([\w$]+),\{incomplete:!1,threadId:\1\.result\.thread_id\}\);/,
@@ -157,6 +163,23 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
     /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null/,
     "published sourceTool-backed results continue into the native accepted presentation branch",
   );
+});
+
+test("patchViewer migrates an installed viewer to keep dynamic tool activity visible", () => {
+  const source = asset("viewer-");
+  const current = patchViewer(source);
+  const activityPattern = /\)continue;\/\*codexLinuxChatBridgeToolCallsSkipRuntime\*\/if\(([\w$]+)\.type===`reasoning`\)/;
+  const match = current.match(activityPattern);
+  assert.ok(match, "current viewer contains the historical Gate 3c visibility marker");
+  const item = match[1];
+  const previous = current.replace(
+    activityPattern,
+    `||${item}.type===\`dynamic-tool-call\`)continue;if(${item}.type===\`reasoning\`)`,
+  );
+  assert.notEqual(previous, current);
+  assert.doesNotMatch(previous, activityPattern);
+  assert.ok(previous.includes("||" + item + ".type===`dynamic-tool-call`)continue;"));
+  assert.equal(patchViewer(previous), current);
 });
 
 test("patchViewer migrates an installed viewer to the persisted-result completed source-tool card", () => {

@@ -18,6 +18,7 @@ const VIEWER_MARKER = "codexP2ToolViewerRuntime";
 const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
 const COMPLETED_PRESENTATION_V2_MARKER = "codexP2ToolCompletedPresentationV2Runtime";
 const COMPLETED_SOURCE_TOOL_CARD_V1_MARKER = "codexP2CompletedSourceToolCardV1Runtime";
+const CHAT_BRIDGE_TOOL_ACTIVITY_MARKER = "codexLinuxChatBridgeToolCallsSkipRuntime";
 const RESULT_PAIR_MARKER = "codexP2ToolResultPairRuntime";
 const RESULT_HANDOFF_V2_MARKER = "codexP2CompletedResultHandoffV2Runtime";
 const EXEC_MARKER = "codexP2ToolExecRuntime";
@@ -367,6 +368,19 @@ function patchCompletedSourceToolCard(source) {
   return source.replace(presentationMarker, branch + presentationMarker);
 }
 
+function patchSourceToolActivityVisibility(source) {
+  const marker = `/*${CHAT_BRIDGE_TOOL_ACTIVITY_MARKER}*/`;
+  if (source.includes(marker)) return source;
+
+  const legacy = /\|\|([\w$]+)\.type===`dynamic-tool-call`\)continue;/g;
+  const matches = [...source.matchAll(legacy)];
+  if (matches.length === 0) return source;
+  if (matches.length !== 1) {
+    throw new Error(`sourceTool activity visibility legacy skip is ambiguous: ${matches.length}`);
+  }
+  return source.replace(legacy, `)continue;${marker}`);
+}
+
 function patchViewer(source) {
   let out = restoreHandoffViewerExecutionMount(source);
   if (!out.includes(VIEWER_MARKER)) {
@@ -378,7 +392,8 @@ function patchViewer(source) {
     );
   }
   out = patchCompletedLocalToolPresentation(out);
-  return patchCompletedSourceToolCard(out);
+  out = patchCompletedSourceToolCard(out);
+  return patchSourceToolActivityVisibility(out);
 }
 
 const PHASE1_ONLY = process.env.PHASE1_ONLY || ""; // "initial" | "primary" | "viewer" | ""
