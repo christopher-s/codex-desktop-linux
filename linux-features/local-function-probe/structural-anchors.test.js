@@ -135,7 +135,7 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
   const source = asset("viewer-");
   const patched = assertIdempotent(patchViewer, source);
   assert.match(patched, /codexP2ToolViewerRuntime/);
-  assert.match(patched, /__codexP2LmItems=\[\.\.\.\(globalThis\.__codexP2LmItems\?\?\[\]\),codexP2LmSnapshot\]\.slice\(-40\)/);
+  assert.match(patched, /__codexP2LmItems=\[\.\.\.\(globalThis\.__codexP2LmItems\?\?\[\]\),codexP2LmSnapshot\]\.slice\(-40\)\}\/\*codexP2LmSnapshotV2Runtime\*\//);
   assert.match(patched, /codexP2ToolCompletedPresentationV2Runtime/);
   assert.match(patched, /codexP2CompletedSourceToolCardV1Runtime/);
   assert.match(patched, /codexLinuxChatBridgeToolCallsSkipRuntime/);
@@ -164,6 +164,22 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
     /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null/,
     "published sourceTool-backed results continue into the native accepted presentation branch",
   );
+});
+
+test("patchViewer migrates installed viewer instrumentation to bounded handoff snapshots", () => {
+  const source = asset("viewer-");
+  const current = patchViewer(source);
+  const snapshotPattern = /if\(([\w$]+)\.sourceTool\|\|\1\.tool===`handoff`\)\{let codexP2LmSnapshot=\{tool:\1\.tool,sourceTool:\1\.sourceTool,callId:\1\.callId,completed:\1\.completed,result:\1\.result\?\?null\};globalThis\.__codexP2LmItem=codexP2LmSnapshot,globalThis\.__codexP2LmItems=\[\.\.\.\(globalThis\.__codexP2LmItems\?\?\[\]\),codexP2LmSnapshot\]\.slice\(-40\)\}\/\*codexP2LmSnapshotV2Runtime\*\//;
+  const match = current.match(snapshotPattern);
+  assert.ok(match, "current viewer contains bounded handoff snapshot instrumentation");
+  const item = match[1];
+  const previous = current.replace(
+    snapshotPattern,
+    `if(${item}.sourceTool||${item}.tool===\`handoff\`)globalThis.__codexP2LmItem={tool:${item}.tool,sourceTool:${item}.sourceTool,completed:${item}.completed}`,
+  );
+  assert.notEqual(previous, current);
+  assert.doesNotMatch(previous, /__codexP2LmItems=/);
+  assert.equal(patchViewer(previous), current);
 });
 
 test("patchViewer migrates an installed viewer to keep dynamic tool activity visible", () => {

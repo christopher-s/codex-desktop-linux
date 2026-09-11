@@ -15,6 +15,7 @@ const VIEWER_PATTERN = /^viewer-[^.]+\.js$/;
 const INITIAL_MARKER = "codexP2ToolSignatureRuntime";
 const PRIMARY_MARKER = "codexP2ToolDetectorRuntime";
 const VIEWER_MARKER = "codexP2ToolViewerRuntime";
+const VIEWER_SNAPSHOT_V2_MARKER = "codexP2LmSnapshotV2Runtime";
 const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
 const COMPLETED_PRESENTATION_V2_MARKER = "codexP2ToolCompletedPresentationV2Runtime";
 const COMPLETED_SOURCE_TOOL_CARD_V1_MARKER = "codexP2CompletedSourceToolCardV1Runtime";
@@ -381,13 +382,38 @@ function patchSourceToolActivityVisibility(source) {
   return source.replace(legacy, `)continue;${marker}`);
 }
 
+function viewerSnapshotPayload(item) {
+  return `if(${item}.sourceTool||${item}.tool===\`handoff\`){let codexP2LmSnapshot={tool:${item}.tool,sourceTool:${item}.sourceTool,callId:${item}.callId,completed:${item}.completed,result:${item}.result??null};globalThis.__codexP2LmItem=codexP2LmSnapshot,globalThis.__codexP2LmItems=[...(globalThis.__codexP2LmItems??[]),codexP2LmSnapshot].slice(-40)}/*${VIEWER_SNAPSHOT_V2_MARKER}*/`;
+}
+
+function upgradeViewerSnapshotInstrumentation(source) {
+  const marker = `/*${VIEWER_SNAPSHOT_V2_MARKER}*/`;
+  const current = /if\(([\w$]+)\.sourceTool\|\|\1\.tool===`handoff`\)\{let codexP2LmSnapshot=\{tool:\1\.tool,sourceTool:\1\.sourceTool,callId:\1\.callId,completed:\1\.completed,result:\1\.result\?\?null\};globalThis\.__codexP2LmItem=codexP2LmSnapshot,globalThis\.__codexP2LmItems=\[\.\.\.\(globalThis\.__codexP2LmItems\?\?\[\]\),codexP2LmSnapshot\]\.slice\(-40\)\}\/\*codexP2LmSnapshotV2Runtime\*\//g;
+  if (source.includes(marker)) {
+    const matches = [...source.matchAll(current)];
+    if (source.split(marker).length - 1 !== 1 || matches.length !== 1) {
+      throw new Error("viewer snapshot V2 marker is malformed or ambiguous");
+    }
+    return source;
+  }
+  if (!source.includes(`/*${VIEWER_MARKER}*/`)) return source;
+
+  const legacy = /if\(([\w$]+)\.sourceTool\|\|\1\.tool===`handoff`\)globalThis\.__codexP2LmItem=\{tool:\1\.tool,sourceTool:\1\.sourceTool,completed:\1\.completed\}/g;
+  const matches = [...source.matchAll(legacy)];
+  if (matches.length !== 1) {
+    throw new Error(`viewer snapshot legacy instrumentation is ambiguous: ${matches.length}`);
+  }
+  return source.replace(legacy, (_match, item) => viewerSnapshotPayload(item));
+}
+
 function patchViewer(source) {
   let out = restoreHandoffViewerExecutionMount(source);
+  out = upgradeViewerSnapshotInstrumentation(out);
   if (!out.includes(VIEWER_MARKER)) {
     out = replaceExactlyOnce(
       out,
       "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
-      `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`){let codexP2LmSnapshot={tool:f.tool,sourceTool:f.sourceTool,callId:f.callId,completed:f.completed,result:f.result??null};globalThis.__codexP2LmItem=codexP2LmSnapshot,globalThis.__codexP2LmItems=[...(globalThis.__codexP2LmItems??[]),codexP2LmSnapshot].slice(-40)}if(f.tool===\`handoff\`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
+      `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;${viewerSnapshotPayload("f")}if(f.tool===\`handoff\`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
       "instrument native handoff viewer while preserving executor mount",
     );
   }
