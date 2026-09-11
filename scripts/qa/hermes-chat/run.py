@@ -998,6 +998,303 @@ def command_e2(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _e4_multi_tool_turn(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    lifecycle: LifecycleLog,
+    baseline,
+    fixture_one: Path,
+    fixture_two: Path,
+    marker: str,
+    token_one: str,
+    token_two: str,
+) -> tuple[str, str, list[str]]:
+    target = wait_for_shell_target(config.host, config.port)
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        await chat.new_chat(client, timeout=45)
+        disclosure_before = await _turn_scoped_work_disclosures(client)
+        prompt = (
+            f"{marker} — This is one turn and requires exactly two ordered local-function continuations. "
+            f"First call hermes_read_file exactly once with path {fixture_one}. "
+            "Wait for that function result before doing anything else. "
+            f"Then call hermes_read_file exactly once with path {fixture_two}. "
+            "Do not call the second function until the first result has returned. Do not call any other tool. "
+            f"Only after the second function result arrives, reply in plain text with exactly: "
+            f"{marker}-RESULT:{token_one}|{token_two}"
+        )
+        result = await chat.send_and_wait(
+            client,
+            prompt,
+            accept_timeout=60,
+            complete_timeout=360,
+        )
+        if not result.accepted or not result.completed:
+            raise AssertionError(f"E4 multi-tool turn did not complete: {result}")
+        await asyncio.sleep(2)
+
+        final_marker = f"{marker}-RESULT:{token_one}|{token_two}"
+        if final_marker not in str(result.after.get("tail") or ""):
+            raise AssertionError(f"E4 final assistant result marker missing from transcript tail: {result.after}")
+
+        disclosure_after = await _turn_scoped_work_disclosures(client)
+        instrumentation = await client.evaluate(
+            """(() => ({
+              signatureBuilds: globalThis.__codexP2SignatureBuilds ?? 0,
+              execCalls: globalThis.__codexP2ExecCalls ?? [],
+              dispatch: globalThis.__codexP2Dispatch ?? null,
+              endpointResponses: globalThis.__codexP2EndpointResp ?? [],
+              resultAttached: globalThis.__codexP2ResultAttached ?? 0,
+              viewerRouted: globalThis.__codexP2ViewerRouted ?? 0,
+              lmItems: globalThis.__codexP2LmItems ?? []
+            }))()"""
+        )
+        instrumentation = instrumentation if isinstance(instrumentation, dict) else {}
+        exec_calls_raw = instrumentation.get("execCalls")
+        exec_calls = exec_calls_raw if isinstance(exec_calls_raw, list) else []
+        if len(exec_calls) != 2:
+            raise AssertionError(f"E4 expected exactly two local-function executions, got {exec_calls}")
+
+        expected_paths = [str(fixture_one), str(fixture_two)]
+        call_ids: list[str] = []
+        for index, raw_call in enumerate(exec_calls):
+            call = raw_call if isinstance(raw_call, dict) else {}
+            if call.get("tool") != "hermes_read_file":
+                raise AssertionError(f"E4 call {index + 1} executed unexpected tool: {call}")
+            args_raw = call.get("args")
+            call_args = args_raw if isinstance(args_raw, dict) else {}
+            if str(call_args.get("path") or "") != expected_paths[index]:
+                raise AssertionError(
+                    f"E4 call {index + 1} path/order mismatch: expected {expected_paths[index]}, got {call}"
+                )
+            call_id = str(call.get("callId") or "")
+            if not call_id:
+                raise AssertionError(f"E4 call {index + 1} lacks call ID: {call}")
+            call_ids.append(call_id)
+        if len(set(call_ids)) != 2:
+            raise AssertionError(f"E4 call IDs are not unique: {call_ids}")
+
+        if int(instrumentation.get("signatureBuilds") or 0) < 1:
+            raise AssertionError(f"E4 local-function signatures were not advertised: {instrumentation}")
+        if instrumentation.get("dispatch") != "ipc":
+            raise AssertionError(f"E4 direct tools did not use lifecycle IPC dispatch: {instrumentation}")
+
+        endpoint_responses_raw = instrumentation.get("endpointResponses")
+        endpoint_responses = endpoint_responses_raw if isinstance(endpoint_responses_raw, list) else []
+        if len(endpoint_responses) != 2:
+            raise AssertionError(f"E4 expected exactly two lifecycle endpoint responses: {endpoint_responses}")
+        for index, raw_endpoint in enumerate(endpoint_responses):
+            endpoint = raw_endpoint if isinstance(raw_endpoint, dict) else {}
+            response_raw = endpoint.get("resp")
+            response = response_raw if isinstance(response_raw, dict) else {}
+            expected_token = (token_one, token_two)[index]
+            if endpoint.get("tool") != "hermes_read_file" or response.get("ok") is not True:
+                raise AssertionError(f"E4 endpoint {index + 1} failed: {endpoint}")
+            if str(response.get("registry_name") or "") != "read_file":
+                raise AssertionError(f"E4 endpoint {index + 1} registry mapping mismatch: {response}")
+            if expected_token not in json.dumps(response.get("result"), ensure_ascii=False):
+                raise AssertionError(
+                    f"E4 endpoint {index + 1} result lacks expected token {expected_token}: {response.get('result')}"
+                )
+
+        lm_items_raw = instrumentation.get("lmItems")
+        lm_items = lm_items_raw if isinstance(lm_items_raw, list) else []
+        final_snapshots: list[dict[str, object]] = []
+        for call_id in call_ids:
+            snapshots = [
+                item
+                for item in lm_items
+                if isinstance(item, dict) and str(item.get("callId") or "") == call_id
+            ]
+            if not snapshots:
+                raise AssertionError(f"E4 viewer snapshots missing for call {call_id}: {lm_items}")
+            snapshot = snapshots[-1]
+            result_raw = snapshot.get("result")
+            snapshot_result = result_raw if isinstance(result_raw, dict) else {}
+            if snapshot.get("completed") is not True or snapshot_result.get("accepted") is not True:
+                raise AssertionError(f"E4 final viewer snapshot is not completed/accepted for {call_id}: {snapshot}")
+            if not str(snapshot_result.get("thread_id") or ""):
+                raise AssertionError(f"E4 final viewer snapshot lacks thread_id for {call_id}: {snapshot}")
+            final_snapshots.append(snapshot)
+
+        client_id, server_id, _events = await _wait_for_identity_pair(lifecycle, baseline)
+        run.record(
+            "e4_multi_tool_turn",
+            marker=marker,
+            seconds=result.seconds,
+            client_conversation_id=client_id,
+            server_conversation_id=server_id,
+            tool_call_ids=call_ids,
+            disclosure_before=disclosure_before,
+            disclosure_after=disclosure_after,
+            final_viewer_snapshots=final_snapshots,
+            instrumentation=instrumentation,
+            shell=result.after,
+        )
+        return client_id, server_id, call_ids
+
+
+def command_e4(args: argparse.Namespace) -> int:
+    config = app.QAAppConfig()
+    lifecycle = LifecycleLog()
+    lcm = LCMDatabase()
+    run = EvidenceRun("e4-multi-tool-one-turn")
+    suffix = uuid.uuid4().hex[:10]
+    marker = f"E4-{suffix}"
+    token_one = f"E4-FIRST-{suffix.upper()}"
+    token_two = f"E4-SECOND-{suffix.upper()}"
+    fixture_one = run.directory / "e4-first.txt"
+    fixture_two = run.directory / "e4-second.txt"
+    fixture_one.write_text(token_one + "\n", encoding="utf-8")
+    fixture_two.write_text(token_two + "\n", encoding="utf-8")
+    lifecycle_baseline = lifecycle.baseline()
+    lcm_total_before = lcm.total_messages() if lcm.path.is_file() else 0
+
+    try:
+        app.start(config)
+        run.record(
+            "e4_app_started",
+            service=app.service_snapshot(config),
+            fixtures=[str(fixture_one), str(fixture_two)],
+            tokens=[token_one, token_two],
+        )
+        client_id, server_id, call_ids = asyncio.run(
+            _e4_multi_tool_turn(
+                run,
+                config,
+                lifecycle,
+                lifecycle_baseline,
+                fixture_one,
+                fixture_two,
+                marker,
+                token_one,
+                token_two,
+            )
+        )
+
+        deadline = time.monotonic() + 30.0
+        events = lifecycle.events_since(lifecycle_baseline)
+        tool_events = [event for event in events if event.get("event") == "tool_call"]
+        while len(tool_events) < 2 and time.monotonic() < deadline:
+            time.sleep(0.25)
+            events = lifecycle.events_since(lifecycle_baseline)
+            tool_events = [event for event in events if event.get("event") == "tool_call"]
+        run.write_json("e4-lifecycle.json", events)
+        if len(tool_events) != 2:
+            raise AssertionError(f"E4 expected exactly two lifecycle tool_call events, got {tool_events}")
+        lifecycle_call_ids = [str(event.get("tool_call_id") or "") for event in tool_events]
+        if lifecycle_call_ids != call_ids:
+            raise AssertionError(
+                f"E4 lifecycle call IDs/order do not match client execution: client={call_ids}, lifecycle={lifecycle_call_ids}"
+            )
+        if any(event.get("name") != "hermes_read_file" or event.get("registry_name") != "read_file" for event in tool_events):
+            raise AssertionError(f"E4 lifecycle tool mapping mismatch: {tool_events}")
+        if any(event.get("ok") is not True for event in tool_events):
+            raise AssertionError(f"E4 lifecycle tool failure: {tool_events}")
+
+        pairs = identity_pairs(events)
+        if (client_id, server_id) not in pairs:
+            raise AssertionError(f"E4 canonical/server identity pair missing: {pairs}")
+        opens = [event for event in session_open_events(events) if event.get("conversation_id") == client_id]
+        if len(opens) != 1:
+            raise AssertionError(f"E4 expected exactly one session_open for {client_id}, found {opens}")
+        session_id = str(opens[0].get("session_id") or "")
+        task_id = str(opens[0].get("task_id") or "")
+        expected_task_id = f"chatgpt-codex:{client_id}"
+        if task_id != expected_task_id:
+            raise AssertionError(f"E4 task identity mismatch: expected {expected_task_id}, got {task_id}")
+
+        session_events = by_session(events).get(session_id, [])
+        failures = failed_events(session_events)
+        if failures:
+            raise AssertionError(f"E4 lifecycle failure events: {failures}")
+        begin_events = [event for event in session_events if event.get("event") == "begin_turn"]
+        complete_events = [event for event in session_events if event.get("event") == "complete_turn"]
+        if len(begin_events) != 1 or len(complete_events) != 1:
+            raise AssertionError(
+                f"E4 expected one lifecycle turn, got begin={begin_events}, complete={complete_events}"
+            )
+        turn_id = str(begin_events[0].get("turn_id") or "")
+        if not turn_id or str(complete_events[0].get("turn_id") or "") != turn_id:
+            raise AssertionError(f"E4 lifecycle turn identity mismatch: begin={begin_events}, complete={complete_events}")
+        for event in tool_events:
+            if (
+                str(event.get("session_id") or "") != session_id
+                or str(event.get("task_id") or "") != task_id
+                or str(event.get("turn_id") or "") != turn_id
+            ):
+                raise AssertionError(f"E4 tool event escaped the single lifecycle turn/runtime: {event}")
+        names = event_names(session_events)
+        if "begin_turn" not in names or "complete_turn" not in names:
+            raise AssertionError(f"E4 lifecycle boundaries missing: {names}")
+        tool_indices = [index for index, name in enumerate(names) if name == "tool_call"]
+        if len(tool_indices) != 2 or not (names.index("begin_turn") < tool_indices[0] < tool_indices[1] < names.index("complete_turn")):
+            raise AssertionError(f"E4 tool-call ordering escaped one lifecycle turn: {names}")
+
+        app.stop(config)
+        rows, tool_row_pairs = _wait_for_tool_pairs(lcm, client_id, minimum=2, timeout=30.0)
+        if len(tool_row_pairs) != 2:
+            raise AssertionError(f"E4 expected exactly two LCM tool call/result pairs, found {len(tool_row_pairs)}")
+        lcm_call_ids = [str(call_row.tool_call_id or "") for call_row, _result_row in tool_row_pairs]
+        if lcm_call_ids != call_ids:
+            raise AssertionError(f"E4 LCM call IDs/order mismatch: client={call_ids}, lcm={lcm_call_ids}")
+        for index, (call_row, result_row) in enumerate(tool_row_pairs):
+            expected_token = (token_one, token_two)[index]
+            if call_row.tool_call_id != result_row.tool_call_id:
+                raise AssertionError(f"E4 LCM pair {index + 1} call/result ID mismatch: {call_row}, {result_row}")
+            if call_row.tool_name != "read_file" or result_row.tool_name != "read_file":
+                raise AssertionError(f"E4 LCM pair {index + 1} tool name mismatch: {call_row}, {result_row}")
+            if expected_token not in result_row.content:
+                raise AssertionError(f"E4 LCM pair {index + 1} lacks expected token {expected_token}: {result_row.content}")
+        if [row.role for row in rows].count("tool_call") != 2 or [row.role for row in rows].count("tool") != 2:
+            raise AssertionError(f"E4 canonical rows do not contain exactly two call/result roles: {[row.role for row in rows]}")
+        server_rows = lcm.rows(server_id)
+        if server_rows:
+            raise AssertionError(f"E4 wrote {len(server_rows)} rows under bare server UUID {server_id}")
+        row_sessions = sorted({row.session_id for row in rows if row.session_id})
+        if row_sessions != [session_id]:
+            raise AssertionError(f"E4 rows span unexpected lifecycle sessions: {row_sessions}")
+        integrity = lcm.integrity()
+        if integrity.get("integrity_check") != "ok" or integrity.get("foreign_key_violations"):
+            raise AssertionError(f"LCM integrity failure after E4: {integrity}")
+        if not integrity.get("fts_matches_messages"):
+            raise AssertionError(f"LCM FTS/message mismatch after E4: {integrity}")
+        lcm_delta = lcm.total_messages() - lcm_total_before
+        if lcm_delta != len(rows):
+            raise AssertionError(f"E4 isolated LCM delta {lcm_delta} does not match canonical row count {len(rows)}")
+
+        run.write_json("e4-finalized-rows.json", [row.__dict__ for row in rows])
+        run.record(
+            "e4_acceptance",
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+            session_id=session_id,
+            task_id=task_id,
+            turn_id=turn_id,
+            tool_call_ids=call_ids,
+            lifecycle_events=names,
+            tool_pairs=len(tool_row_pairs),
+            canonical_roles=[row.role for row in rows],
+            canonical_rows=len(rows),
+            server_key_rows=len(server_rows),
+            lcm_total_delta=lcm_delta,
+            integrity=integrity,
+        )
+    except Exception as exc:
+        try:
+            if not app.unit_is_active(config):
+                app.start(config)
+        except Exception:
+            pass
+        run.finish("FAIL", error=f"{type(exc).__name__}: {exc}")
+        print(json.dumps({"verdict": "FAIL", "run": str(run.directory), "error": str(exc)}, indent=2))
+        return 1
+
+    app.start(config)
+    run.finish("PASS")
+    print(json.dumps({"verdict": "PASS", "run": str(run.directory)}, indent=2))
+    return 0
+
+
 async def _e5_turns(
     run: EvidenceRun,
     config: app.QAAppConfig,
@@ -1369,6 +1666,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     e2_parser = subparsers.add_parser("e2", help="run E2 direct local-tool lifecycle + disclosure acceptance")
     e2_parser.set_defaults(func=command_e2)
+
+    e4_parser = subparsers.add_parser("e4", help="run E4 two-tool one-turn continuation acceptance")
+    e4_parser.set_defaults(func=command_e4)
 
     e5_parser = subparsers.add_parser("e5", help="run E5 same-process conversation/session reuse")
     e5_parser.set_defaults(func=command_e5)

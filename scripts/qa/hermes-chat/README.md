@@ -58,10 +58,13 @@ python3 scripts/qa/hermes-chat/run.py sanity
 python3 scripts/qa/hermes-chat/run.py state
 python3 scripts/qa/hermes-chat/run.py e1
 python3 scripts/qa/hermes-chat/run.py e2
+python3 scripts/qa/hermes-chat/run.py e4
 python3 scripts/qa/hermes-chat/run.py e5
 python3 scripts/qa/hermes-chat/run.py e6
 ```
 
 `e2` creates a unique local fixture and requires exactly one directly advertised `hermes_read_file` call. Acceptance correlates one client call ID across lifecycle diagnostics and the canonical LCM call/result pair, requires exact registry execution/result continuation, verifies one new turn-scoped native `Continued in Work` disclosure, requires the final viewer snapshot for that call ID to remain `completed:true` with an accepted result and `thread_id`, and keeps the final assistant acknowledgement transcript-only so persistence remains exactly four canonical rows.
 
-Additional E3/E4/E7-E10 scenarios are added as their supporting primitives are committed and unit-tested.
+`e4` creates two unique local fixtures and requires one user turn to read them sequentially with exactly two direct `hermes_read_file` continuations. Acceptance requires ordered unique client/lifecycle/LCM call IDs, exactly two successful call/result pairs, both tools inside one lifecycle turn/session/task, completed accepted viewer snapshots for both calls, no duplicate execution, a final answer that contains both exact fixture tokens only after the second result, zero bare-server rows, and clean LCM integrity.
+
+Additional E3/E7-E10 scenarios are added as their supporting primitives are committed and unit-tested.
