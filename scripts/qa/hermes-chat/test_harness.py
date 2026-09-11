@@ -17,7 +17,7 @@ if str(HERE) not in sys.path:
 
 from app import QAAppConfig, launch_arguments, sh_quote, transient_environment_args
 from cdp_client import CDPError, CDPTarget, select_shell_target
-from chat import _draft_expression, _needs_send_fallback
+from chat import _draft_expression, _needs_send_fallback, _turn_accepted
 from lifecycle import identity_pairs
 from lcm import LCMDatabase, assert_prefix_unchanged, tool_pairs
 
@@ -59,6 +59,12 @@ class PromptEncodingTests(unittest.TestCase):
         self.assertFalse(_needs_send_fallback(before, {"you": 2, "composerLength": 0}))
         self.assertFalse(_needs_send_fallback(before, {"you": 1, "composerLength": 0}))
         self.assertFalse(_needs_send_fallback(before, {"you": 1, "composerLength": -1}))
+
+    def test_turn_acceptance_requires_a_new_rendered_user_turn(self) -> None:
+        before = {"you": 1, "composerLength": 0}
+        self.assertFalse(_turn_accepted(before, {"you": 1, "composerLength": 69}))
+        self.assertFalse(_turn_accepted(before, {"you": 1, "composerLength": 0}))
+        self.assertTrue(_turn_accepted(before, {"you": 2, "composerLength": 0}))
 
 
 class LifecycleTests(unittest.TestCase):

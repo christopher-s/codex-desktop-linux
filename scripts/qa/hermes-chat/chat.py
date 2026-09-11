@@ -270,6 +270,10 @@ def _needs_send_fallback(before: dict[str, Any], after: dict[str, Any]) -> bool:
     )
 
 
+def _turn_accepted(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    return int(after.get("you", 0)) > int(before.get("you", 0))
+
+
 async def send_and_wait(
     client: CDPClient,
     prompt: str,
@@ -288,7 +292,7 @@ async def send_and_wait(
     while time.monotonic() < accept_deadline:
         await asyncio.sleep(min(1.5, poll_interval))
         last = await state(client)
-        if last.get("you", 0) > before.get("you", 0) or await visible_text_present(client, prompt):
+        if _turn_accepted(before, last):
             accepted = True
             break
         if _needs_send_fallback(before, last):
