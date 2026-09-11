@@ -1333,6 +1333,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
                 "conversation_id": runtime.conversation_id,
                 "name": name,
                 "registry_name": registry_name,
+                "tool_call_id": tool_call_id,
                 "ok": True,
                 "elapsed_ms": elapsed_ms,
                 "arg_keys": sorted(args.keys()),
@@ -1361,6 +1362,7 @@ def _handle_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
                 "conversation_id": runtime.conversation_id,
                 "name": name,
                 "registry_name": registry_name,
+                "tool_call_id": tool_call_id,
                 "error": f"{type(exc).__name__}: {exc}",
                 "elapsed_ms": elapsed_ms,
             }

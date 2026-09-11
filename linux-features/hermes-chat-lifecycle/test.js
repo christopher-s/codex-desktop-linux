@@ -1500,8 +1500,12 @@ test("persistent helper records tool_call phases into the shared transcript (pla
     // Diagnostics log the calls with the host-owned session identity.
     const events = fs.readFileSync(path.join(stateDir, "hermes-chat-lifecycle.jsonl"), "utf8")
       .trim().split("\n").map((line) => JSON.parse(line));
-    assert.equal(events.filter((event) => event.event === "tool_call").length, 3);
-    assert.equal(events.filter((event) => event.event === "tool_call_error").length, 1);
+    const toolCallEvents = events.filter((event) => event.event === "tool_call");
+    const toolErrorEvents = events.filter((event) => event.event === "tool_call_error");
+    assert.equal(toolCallEvents.length, 3);
+    assert.equal(toolErrorEvents.length, 1);
+    assert.deepEqual(toolCallEvents.map((event) => event.tool_call_id), ["call-1", "call-2", "call-4"]);
+    assert.equal(toolErrorEvents[0].tool_call_id, "call-3");
     assert.equal(events.filter((event) => event.event === "session_open").length, 2);
     const openEvents = events.filter((event) => event.event === "session_open");
     assert.equal(openEvents[0].conversation_id, "conversation-1");
