@@ -860,3 +860,35 @@ Lifecycle/persistence acceptance:
 ### E2 conclusion
 
 **E2 is CLOSED/PASS.** Ordinary Chat now proves one directly advertised native-local Hermes function can execute through the shared lifecycle/registry path, correlate one call identity across client/lifecycle/LCM, return its exact result through native continuation, and retain a completed turn-scoped native disclosure after the final Chat remount. Phase C continues with E4/E9 plus explicit unrelated-route/Gizmo regression coverage.
+
+## 2026-09-11 — E1 current-product regression after E2 closure
+
+Installed ASAR: `6d3dde162a52628a4cad482513e7e785db49de0076232bbf63a0024e206c7d06`.
+
+Before the full rerun, an isolated one-turn restart/reopen diagnostic proved the previously failed Recents lookup was transient rather than a persistent identity defect. Immediately after restart the shell rendered zero Recents rows for two hydration samples; after native Recents wake/hydration, the new server conversation appeared and exact-ID reopen succeeded. The older failed-regression server ID `6aa3ac9e-1e7c-83e8-9fb8-a247afbcb2d6` was also present in the hydrated Recents list during this diagnostic.
+
+### Full E1 regression — PASS
+
+Run ID: `20260911T153737Z-e1-no-tool-lifecycle-aa5fb7ac`.
+
+Observed:
+
+- canonical conversation: `local-chatgpt:24e18af5-e3cb-41ef-b7e7-2cd8d143c0f4`;
+- server UUID: `6aa42047-bdf8-83e8-accf-c6a2da30fc1c`;
+- lifecycle session: `hs_codex_a4fa1e8cbaa44efd9ea1af50b957ec72`;
+- stable task: `chatgpt-codex:local-chatgpt:24e18af5-e3cb-41ef-b7e7-2cd8d143c0f4`;
+- turn 1 reproduced the known native composer detach and recovered by exact server-ID remount;
+- turn 2 completed on the recovered conversation;
+- both turns independently produced `begin_turn -> pre_api_request -> post_api_request -> on_session_end -> complete_turn`;
+- tool lifecycle events: 0;
+- finalized canonical roles: `user, assistant, user, assistant`;
+- canonical LCM row delta: exactly 4;
+- tool rows: 0;
+- rows under the bare server UUID: 0;
+- `PRAGMA integrity_check=ok`, FTS matched messages, foreign-key violations: 0;
+- after app restart, exact server-ID reopen restored both turn markers and a visible composer;
+- read-only reopen produced 0 lifecycle events and no LCM/tool/server-key mutations.
+
+### Regression conclusion
+
+**E1 remains CLOSED/PASS on the E2-accepted product.** The earlier reopen timeout was not reproducible as a persistent product or identity failure; isolated hydration diagnostics and the fresh full regression both succeeded. Phase C can proceed to E4/E9 and explicit unrelated-route/Gizmo regression coverage.
