@@ -799,3 +799,64 @@ Observed:
 ### E1 conclusion
 
 **E1 is CLOSED/PASS.** The final unattended run proves ordinary no-tool Chat traverses the full Hermes lifecycle on every turn, preserves one logical conversation/session/task through an upstream shell remount, persists the canonical four-message history, and survives restart/exact-server-ID reopen without read-only side effects. Phase C continues with E2/E4/E9 and explicit unrelated-route/Gizmo regression coverage.
+
+## 2026-09-11 — Phase C E2 direct local-tool acceptance
+
+### Product closure before acceptance
+
+E2 started with the direct local-tool execution path already functionally proven: `hermes_read_file` was advertised to the ordinary Chat model, dispatched over the shared Hermes lifecycle IPC, mapped to registry `read_file`, persisted as one canonical LCM call/result pair, and returned through native role:`tool` continuation. The remaining E2 gap was persistent completed disclosure plus exact call-ID observability.
+
+The closure sequence established and fixed four distinct presentation/state defects without changing the tool/lifecycle architecture:
+
+- `7436035` added exact `tool_call_id` to lifecycle success/error diagnostics so the client call could be correlated with lifecycle and LCM rows.
+- `cffd044` removed the explicit post-result suppression of the native completed handoff presentation.
+- `dfcb924` kept the completed paired item's internal `tool:"handoff"` identity while preserving the real function name in `sourceTool`, so completion still routes through the native handoff viewer.
+- `cbad5bc` added a persisted-result fallback for the native completed handoff card when the transient handoff status store no longer retains the accepted task.
+- `9dfa06f` restored the historical Gate 3c activity behavior so regular Chat does not discard dynamic-tool items before `Lm`.
+- `23a465d` versioned/migrated bounded `Lm` snapshot instrumentation for already-patched viewers.
+- `86b2607` fixed the final stale-remount race: once a completed accepted result is seen for a `callId`, a later stale pending copy of the same `sourceTool` item is rehydrated back to `completed:true` before snapshotting/native viewer routing.
+- `fccaec8` replaced the obsolete global `View activity` QA heuristic with the concrete turn-scoped native `Continued in Work` disclosure plus final completed/accepted snapshot assertions.
+
+Installed ASAR for acceptance: `6d3dde162a52628a4cad482513e7e785db49de0076232bbf63a0024e206c7d06`. The final product iteration was a viewer-only migration and passed an 8,985/8,985 ASAR round trip with zero mismatches. Current source validation at acceptance: local-function structural tests **12/12**, lifecycle tests **26/26**, QA harness **11/11**, related suite **122 total / 110 pass / 12 expected skips / 0 failures**.
+
+### Authoritative unattended E2 — PASS
+
+Run ID: `20260911T071625Z-e2-direct-local-tool-71501845`.
+
+Observed identity/correlation:
+
+- canonical conversation: `local-chatgpt:64867a09-7294-40e3-b563-9db7c0485a93`;
+- server UUID: `6aa3aad3-78b8-83e8-9240-7ba294d3c5a2`;
+- lifecycle session: `hs_codex_d8f226aa259444d9b9da7166887291df`;
+- stable task: `chatgpt-codex:local-chatgpt:64867a09-7294-40e3-b563-9db7c0485a93`;
+- direct client/tool call ID: `55abff00-3cdc-4411-805f-4f42e9dd3920`;
+- lifecycle `tool_call.tool_call_id`: exact same ID;
+- canonical LCM `tool_call`/`tool` rows: exact same ID.
+
+Execution/presentation acceptance:
+
+- exactly one advertised local function executed: `hermes_read_file`;
+- exact fixture path reached the direct tool;
+- dispatch transport: `ipc`;
+- registry mapping: `read_file`;
+- endpoint response: `ok:true` with the exact fixture token;
+- final assistant continuation contained the exact requested result marker;
+- completed disclosure baseline was empty;
+- after completion exactly one turn-scoped native disclosure remained: `Continued in Work`, with `turnKey=09e23975-6961-418e-93f3-ac2ac83c6eec`;
+- final viewer snapshot for the same call ID remained `tool:"handoff"`, `sourceTool:"hermes_read_file"`, `completed:true`, with `accepted:true` and `thread_id=p2ok-55abff00-3cdc-4411-805f-4f42e9dd3920`.
+
+Lifecycle/persistence acceptance:
+
+- lifecycle contained `begin_turn -> pre_api_request -> post_api_request -> on_session_end -> complete_turn` with no failure events;
+- one successful lifecycle `tool_call` for `hermes_read_file/read_file`;
+- finalized canonical LCM roles: `user, assistant, tool_call, tool`;
+- canonical LCM row delta: exactly 4;
+- tool pairs: exactly 1;
+- rows under the bare server UUID: 0;
+- `PRAGMA integrity_check=ok`;
+- messages = FTS = 4;
+- foreign-key violations: 0.
+
+### E2 conclusion
+
+**E2 is CLOSED/PASS.** Ordinary Chat now proves one directly advertised native-local Hermes function can execute through the shared lifecycle/registry path, correlate one call identity across client/lifecycle/LCM, return its exact result through native continuation, and retain a completed turn-scoped native disclosure after the final Chat remount. Phase C continues with E4/E9 plus explicit unrelated-route/Gizmo regression coverage.
