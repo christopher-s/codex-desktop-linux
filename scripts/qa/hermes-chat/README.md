@@ -62,6 +62,6 @@ python3 scripts/qa/hermes-chat/run.py e5
 python3 scripts/qa/hermes-chat/run.py e6
 ```
 
-`e2` creates a unique local fixture and requires exactly one directly advertised `hermes_read_file` call. Acceptance correlates one client call ID across lifecycle diagnostics and the canonical LCM call/result pair, requires exact registry execution/result continuation, verifies a new visible completed `View activity` disclosure appears relative to the pre-turn baseline, and keeps the final assistant acknowledgement transcript-only so persistence remains exactly four canonical rows.
+`e2` creates a unique local fixture and requires exactly one directly advertised `hermes_read_file` call. Acceptance correlates one client call ID across lifecycle diagnostics and the canonical LCM call/result pair, requires exact registry execution/result continuation, verifies one new turn-scoped native `Continued in Work` disclosure, requires the final viewer snapshot for that call ID to remain `completed:true` with an accepted result and `thread_id`, and keeps the final assistant acknowledgement transcript-only so persistence remains exactly four canonical rows.
 
 Additional E3/E4/E7-E10 scenarios are added as their supporting primitives are committed and unit-tested.

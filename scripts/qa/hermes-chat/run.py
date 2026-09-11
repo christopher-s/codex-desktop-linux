@@ -384,21 +384,26 @@ def _wait_for_tool_pairs(
     return rows, pairs
 
 
-async def _visible_activity_count(client: CDPClient) -> int:
-    return int(
-        await client.evaluate(
-            """(() => {
-              const visible = (node) => {
-                const rect = node.getBoundingClientRect();
-                const style = getComputedStyle(node);
-                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-              };
-              return [...document.querySelectorAll('button,[role=button]')].filter((node) =>
-                visible(node) && /view activity/i.test(`${node.getAttribute('aria-label') || ''} ${node.textContent || ''}`)
-              ).length;
-            })()"""
-        )
+async def _turn_scoped_work_disclosures(client: CDPClient) -> list[dict[str, object]]:
+    value = await client.evaluate(
+        """(() => {
+          const visible = (node) => {
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          return [...document.querySelectorAll('[data-turn-key] a')]
+            .filter((node) => visible(node) && (node.textContent || '').trim() === 'Continued in Work')
+            .map((node) => ({
+              text: (node.textContent || '').trim(),
+              href: node.getAttribute('href'),
+              turnKey: node.closest('[data-turn-key]')?.getAttribute('data-turn-key') || null
+            }));
+        })()"""
     )
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _wait_for_rows(
@@ -749,7 +754,7 @@ async def _e2_direct_tool_turn(
     target = wait_for_shell_target(config.host, config.port)
     async with CDPClient(target, host=config.host, port=config.port) as client:
         await chat.new_chat(client, timeout=45)
-        activity_before = await _visible_activity_count(client)
+        disclosure_before = await _turn_scoped_work_disclosures(client)
         prompt = (
             f"{marker} — You MUST call the advertised local function hermes_read_file exactly once, "
             f"with path exactly {fixture}. Do not answer from memory, do not refuse, and do not call any other tool. "
@@ -763,11 +768,15 @@ async def _e2_direct_tool_turn(
         )
         if not result.accepted or not result.completed:
             raise AssertionError(f"E2 direct-tool turn did not complete: {result}")
-        activity_after = await _visible_activity_count(client)
-        if activity_after <= activity_before:
+        await asyncio.sleep(2)
+        disclosure_after = await _turn_scoped_work_disclosures(client)
+        if len(disclosure_after) != len(disclosure_before) + 1:
             raise AssertionError(
-                f"E2 completed tool disclosure did not appear: before={activity_before}, after={activity_after}"
+                "E2 expected exactly one new turn-scoped native completed disclosure: "
+                f"before={disclosure_before}, after={disclosure_after}"
             )
+        if any(not str(item.get("turnKey") or "") for item in disclosure_after):
+            raise AssertionError(f"E2 completed disclosure is not turn-scoped: {disclosure_after}")
         final_marker = f"{marker}-RESULT:{token}"
         if final_marker not in str(result.after.get("tail") or ""):
             raise AssertionError(f"E2 final assistant result marker missing from transcript tail: {result.after}")
@@ -781,7 +790,8 @@ async def _e2_direct_tool_turn(
               lastResult: globalThis.__codexP2LastResult ?? null,
               resultAttached: globalThis.__codexP2ResultAttached ?? 0,
               attachedItem: globalThis.__codexP2AttachedItem ?? null,
-              viewerRouted: globalThis.__codexP2ViewerRouted ?? 0
+              viewerRouted: globalThis.__codexP2ViewerRouted ?? 0,
+              lmItems: globalThis.__codexP2LmItems ?? []
             }))()"""
         )
         instrumentation = instrumentation if isinstance(instrumentation, dict) else {}
@@ -798,6 +808,24 @@ async def _e2_direct_tool_turn(
         call_id = str(call.get("callId") or "")
         if not call_id:
             raise AssertionError(f"E2 direct-tool call ID missing: {call}")
+        lm_items_raw = instrumentation.get("lmItems")
+        lm_items = lm_items_raw if isinstance(lm_items_raw, list) else []
+        call_snapshots = [
+            item
+            for item in lm_items
+            if isinstance(item, dict) and str(item.get("callId") or "") == call_id
+        ]
+        if not call_snapshots:
+            raise AssertionError(f"E2 viewer snapshots missing for direct-tool call {call_id}: {lm_items}")
+        final_snapshot = call_snapshots[-1]
+        final_result_raw = final_snapshot.get("result")
+        final_result = final_result_raw if isinstance(final_result_raw, dict) else {}
+        if final_snapshot.get("completed") is not True or final_result.get("accepted") is not True:
+            raise AssertionError(
+                f"E2 final viewer snapshot is not completed/accepted for {call_id}: {final_snapshot}"
+            )
+        if not str(final_result.get("thread_id") or ""):
+            raise AssertionError(f"E2 final completed viewer snapshot lacks thread_id: {final_snapshot}")
         if int(instrumentation.get("signatureBuilds") or 0) < 1:
             raise AssertionError(f"E2 local-function signatures were not advertised: {instrumentation}")
         if instrumentation.get("dispatch") != "ipc":
@@ -823,8 +851,9 @@ async def _e2_direct_tool_turn(
             client_conversation_id=client_id,
             server_conversation_id=server_id,
             tool_call_id=call_id,
-            activity_before=activity_before,
-            activity_after=activity_after,
+            disclosure_before=disclosure_before,
+            disclosure_after=disclosure_after,
+            final_viewer_snapshot=final_snapshot,
             instrumentation=instrumentation,
             shell=result.after,
         )
