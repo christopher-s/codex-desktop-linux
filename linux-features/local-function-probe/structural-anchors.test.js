@@ -136,7 +136,13 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
   const patched = assertIdempotent(patchViewer, source);
   assert.match(patched, /codexP2ToolViewerRuntime/);
   assert.match(patched, /codexP2ToolCompletedPresentationV2Runtime/);
+  assert.match(patched, /codexP2CompletedSourceToolCardV1Runtime/);
   assert.doesNotMatch(patched, /codexP2ToolCompletedPresentationRuntime/);
+  assert.match(
+    patched,
+    /\/\*codexP2CompletedSourceToolCardV1Runtime\*\/if\(([\w$]+)\.sourceTool&&\1\.completed&&\1\.result\?\.accepted===!0&&typeof \1\.result\.thread_id===`string`&&\1\.result\.thread_id\.length>0\)return\(0,([\w$]+)\.jsx\)\(([\w$]+),\{incomplete:!1,threadId:\1\.result\.thread_id\}\);/,
+    "completed sourceTool-backed items render through the native completed handoff card",
+  );
   assert.match(
     patched,
     /if\(f\.tool===`handoff`\)\{globalThis\.__codexP2ViewerRouted/,
@@ -151,6 +157,17 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
     /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null/,
     "published sourceTool-backed results continue into the native accepted presentation branch",
   );
+});
+
+test("patchViewer migrates an installed viewer to the persisted-result completed source-tool card", () => {
+  const source = asset("viewer-");
+  const current = patchViewer(source);
+  const sourceCardPattern = /\/\*codexP2CompletedSourceToolCardV1Runtime\*\/if\(([\w$]+)\.sourceTool&&\1\.completed&&\1\.result\?\.accepted===!0&&typeof \1\.result\.thread_id===`string`&&\1\.result\.thread_id\.length>0\)return\(0,([\w$]+)\.jsx\)\(([\w$]+),\{incomplete:!1,threadId:\1\.result\.thread_id\}\);/;
+  assert.match(current, sourceCardPattern);
+  const previous = current.replace(sourceCardPattern, "");
+  assert.notEqual(previous, current);
+  assert.doesNotMatch(previous, /codexP2CompletedSourceToolCardV1Runtime/);
+  assert.equal(patchViewer(previous), current);
 });
 
 test("patchViewer migrates completed-presentation suppression and the older top-level bypass", () => {

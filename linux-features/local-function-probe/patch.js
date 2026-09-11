@@ -17,6 +17,7 @@ const PRIMARY_MARKER = "codexP2ToolDetectorRuntime";
 const VIEWER_MARKER = "codexP2ToolViewerRuntime";
 const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
 const COMPLETED_PRESENTATION_V2_MARKER = "codexP2ToolCompletedPresentationV2Runtime";
+const COMPLETED_SOURCE_TOOL_CARD_V1_MARKER = "codexP2CompletedSourceToolCardV1Runtime";
 const RESULT_PAIR_MARKER = "codexP2ToolResultPairRuntime";
 const RESULT_HANDOFF_V2_MARKER = "codexP2CompletedResultHandoffV2Runtime";
 const EXEC_MARKER = "codexP2ToolExecRuntime";
@@ -341,6 +342,31 @@ function patchCompletedLocalToolPresentation(source) {
   );
 }
 
+function patchCompletedSourceToolCard(source) {
+  const marker = `/*${COMPLETED_SOURCE_TOOL_CARD_V1_MARKER}*/`;
+  const expectedBranch = /\/\*codexP2CompletedSourceToolCardV1Runtime\*\/if\(([\w$]+)\.sourceTool&&\1\.completed&&\1\.result\?\.accepted===!0&&typeof \1\.result\.thread_id===`string`&&\1\.result\.thread_id\.length>0\)return\(0,([\w$]+)\.jsx\)\(([\w$]+),\{incomplete:!1,threadId:\1\.result\.thread_id\}\);/g;
+  if (source.includes(marker)) {
+    const matches = [...source.matchAll(expectedBranch)];
+    if (source.split(marker).length - 1 !== 1 || matches.length !== 1) {
+      throw new Error("completed source-tool card V1 marker is malformed or ambiguous");
+    }
+    return source;
+  }
+
+  const presentationMarker = `/*${COMPLETED_PRESENTATION_V2_MARKER}*/`;
+  if (source.split(presentationMarker).length - 1 !== 1) {
+    throw new Error("completed source-tool card requires exactly one completed-presentation V2 marker");
+  }
+  const contract = /function ([\w$]+)\(([\w$]+)\)\{let [\w$]+=\(0,[\w$]+\.c\)\([0-9]+\),\{conversationId:[\w$]+,item:([\w$]+),onContinueSuccess:[\w$]+,shouldBlockExternalEgress:[\w$]+\}=\2,[\s\S]{0,2200}?\/\*codexP2ToolCompletedPresentationV2Runtime\*\/if\(!([\w$]+)&&\(([\w$]+)\?\.type===`accepted`\|\|\5\?\.type===`partial`\)\)\{let ([\w$]+)=\5\.type===`partial`,[\w$]+;return[\s\S]{0,600}?\(0,([\w$]+)\.jsx\)\(([\w$]+),\{incomplete:\6,threadId:\5\.threadId\}\)/g;
+  const matches = [...source.matchAll(contract)];
+  if (matches.length !== 1) {
+    throw new Error(`completed source-tool card native handoff contract is ambiguous: ${matches.length}`);
+  }
+  const [, _fn, _arg, item, _failedPublication, _status, _incomplete, jsxFactory, completedCard] = matches[0];
+  const branch = `${marker}if(${item}.sourceTool&&${item}.completed&&${item}.result?.accepted===!0&&typeof ${item}.result.thread_id===\`string\`&&${item}.result.thread_id.length>0)return(0,${jsxFactory}.jsx)(${completedCard},{incomplete:!1,threadId:${item}.result.thread_id});`;
+  return source.replace(presentationMarker, branch + presentationMarker);
+}
+
 function patchViewer(source) {
   let out = restoreHandoffViewerExecutionMount(source);
   if (!out.includes(VIEWER_MARKER)) {
@@ -351,7 +377,8 @@ function patchViewer(source) {
       "instrument native handoff viewer while preserving executor mount",
     );
   }
-  return patchCompletedLocalToolPresentation(out);
+  out = patchCompletedLocalToolPresentation(out);
+  return patchCompletedSourceToolCard(out);
 }
 
 const PHASE1_ONLY = process.env.PHASE1_ONLY || ""; // "initial" | "primary" | "viewer" | ""
