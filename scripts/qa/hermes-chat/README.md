@@ -43,7 +43,7 @@ On the present Wayland/GNOME login, compositor window enumeration is unavailable
 - Never drive the hidden `chatgpt.com` webview target.
 - Select the visible shell `[contenteditable=true]`; never `#prompt-textarea`.
 - Move prompt text through base64/UTF-8 decoding inside JS so quotes/newlines/unicode cannot corrupt the expression.
-- Dispatch Enter through CDP `Input.dispatchKeyEvent`. If Enter leaves a populated reopened-thread draft unsubmitted, retry the native visible Send control until it is actually clicked; never mark the fallback consumed on a control miss.
+- Dispatch Enter through CDP `Input.dispatchKeyEvent`. If Enter leaves a populated reopened-thread draft unsubmitted, retry the native visible Send control on each acceptance poll while the user-turn count is unchanged and the draft remains populated. Stop retrying only after submission is observed.
 - Accept a send only after the user turn appears in the rendered shell transcript.
 - Treat Recents as virtualized and interaction-gated.
 - Capture conversation IDs dynamically in reusable scenarios.
