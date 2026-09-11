@@ -135,6 +135,7 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
   const source = asset("viewer-");
   const patched = assertIdempotent(patchViewer, source);
   assert.match(patched, /codexP2ToolViewerRuntime/);
+  assert.match(patched, /__codexP2LmItems=\[\.\.\.\(globalThis\.__codexP2LmItems\?\?\[\]\),codexP2LmSnapshot\]\.slice\(-40\)/);
   assert.match(patched, /codexP2ToolCompletedPresentationV2Runtime/);
   assert.match(patched, /codexP2CompletedSourceToolCardV1Runtime/);
   assert.match(patched, /codexLinuxChatBridgeToolCallsSkipRuntime/);

@@ -387,7 +387,7 @@ function patchViewer(source) {
     out = replaceExactlyOnce(
       out,
       "if(f.type===`dynamic-tool-call`){if(f.tool===`handoff`){",
-      `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`)globalThis.__codexP2LmItem={tool:f.tool,sourceTool:f.sourceTool,completed:f.completed};if(f.tool===\`handoff\`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
+      `if(f.type===\`dynamic-tool-call\`){globalThis.__codexP2LmSeen=(globalThis.__codexP2LmSeen??0)+1;if(f.sourceTool||f.tool===\`handoff\`){let codexP2LmSnapshot={tool:f.tool,sourceTool:f.sourceTool,callId:f.callId,completed:f.completed,result:f.result??null};globalThis.__codexP2LmItem=codexP2LmSnapshot,globalThis.__codexP2LmItems=[...(globalThis.__codexP2LmItems??[]),codexP2LmSnapshot].slice(-40)}if(f.tool===\`handoff\`){globalThis.__codexP2ViewerRouted=(globalThis.__codexP2ViewerRouted??0)+1;/*${VIEWER_MARKER}*/`,
       "instrument native handoff viewer while preserving executor mount",
     );
   }

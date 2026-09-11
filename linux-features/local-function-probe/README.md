@@ -96,4 +96,7 @@ call trio) without a catch-all shim.
   restates the file content (`PHASE1-DETERMINISTIC-FIXTURE-73`) verbatim.
 
 Instrumentation is namespaced `__codexP2*` (`__codexP2ExecCalls`,
-`__codexP2Dispatch`, `__codexP2EndpointResp`).
+`__codexP2Dispatch`, `__codexP2EndpointResp`). Viewer QA also keeps a bounded
+`__codexP2LmItems` sequence of the last 40 sourceTool/handoff snapshots with
+`callId`, `completed`, and `result` so completed-item state transitions can be
+verified without retaining unbounded renderer history.
