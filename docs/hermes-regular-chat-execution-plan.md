@@ -318,15 +318,16 @@ Status: **COMPLETE**
 
 ### Phase C — full Hermes lifecycle for regular Chat
 
-Status: **NOT STARTED**
+Status: **IN PROGRESS — E1 CLOSED/PASS; E2/E4/E9 pending**
 
-- [ ] Identify the regular-Chat request/turn hooks that are upstream of local tool dispatch.
-- [ ] Generalize lifecycle activation from registered Gizmos to the intended regular-Chat eligibility policy.
-- [ ] Ensure no-tool turns run begin/pre-request/complete lifecycle.
-- [ ] Reuse the open runtime for local tool calls within the turn.
-- [ ] Preserve existing Gizmo behavior during transition.
-- [ ] Unit/structural tests.
-- [ ] E1, E2, E4, E9 live runs.
+- [x] Identify the regular-Chat request/turn hooks that are upstream of local tool dispatch.
+- [x] Generalize lifecycle activation from registered Gizmos to the intended regular-Chat eligibility policy.
+- [x] Ensure no-tool turns run begin/pre-request/complete lifecycle.
+- [x] Reuse the open runtime for local tool calls within the turn.
+- [ ] Preserve existing Gizmo behavior during transition with an explicit live regression run.
+- [x] Unit/structural tests. Current lifecycle suite: **26/26 pass**; QA harness: **11/11 pass** after E1 send/reopen hardening.
+- [x] E1 live run. **PASS:** `20260911T013528Z-e1-no-tool-lifecycle-c8bb1287`; two no-tool turns, one lifecycle session/task, exact server-ID remount recovery after a pristine-upstream-reproduced composer detach, four canonical LCM rows, zero tools/server-key rows, clean integrity, restart/reopen, and read-only postconditions.
+- [ ] E2, E4, E9 live runs.
 
 ### Phase D — productionize regular-Chat Hermes tooling
 

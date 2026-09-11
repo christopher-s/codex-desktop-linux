@@ -764,3 +764,38 @@ The live shared `~/.hermes/lcm.db` remains untouched.
 **E5 is CLOSED/PASS and Phase B is complete.**
 
 The remaining presentation limitation is explicit: the transcript still exposes the synthetic handoff envelope instead of a polished final disclosure. Functional same-process continuation is proven because the composer remains usable after each tool turn. Final visual disclosure/productization remains under R5/Phase D and still requires current-build Computer Use proof.
+
+## 2026-09-10 — Phase C E1 no-tool regular-Chat lifecycle acceptance
+
+### Product/harness closure before acceptance
+
+The ordinary-Chat renderer lifecycle now captures the current user-turn identity and text synchronously before upstream minified locals are reused, then performs `begin_turn` at the late pre-transport boundary against the prepared request. Current product checkpoint: `f9e4509` (`StableUserCaptureV1` + `LateBeginV3`). Installed ASAR for E1: `6d43bf417974fe8c80fb65ebfd9619c069836381344355b267820afab282acc7`.
+
+The strict composer check was separately tested against a pristine upstream ASAR under an isolated authenticated profile. Two of four upstream-only turns detached the composer after a correct completed transcript, proving this shell state is ambient upstream behavior and cannot serve as a standalone Hermes failure signal. E1 therefore records the detach, navigates to New chat, reopens the exact observed server conversation ID from Recents, and requires the composer again before continuing. Lifecycle, persistence, identity, tool-count, integrity, restart/reopen, and read-only assertions remain strict.
+
+Reopened-thread QA also exposed two harness defects and one product-shape defect during closure: Enter can leave a populated reopened draft unsent; body-wide prompt visibility can mistake that draft for a submitted turn; and late renderer locals can no longer be assumed to retain the original user message. The final harness accepts a send only after the rendered `you` count increases and retries the native Send control while the draft remains populated. Relevant pushed checkpoints include `b4165b6`, `ab02227`, `adcdbc3`, `dd18300`, and `a3ab728`.
+
+### Authoritative unattended E1 — PASS
+
+Run ID: `20260911T013528Z-e1-no-tool-lifecycle-c8bb1287` (UTC run timestamp; executed during the 2026-09-10 local QA session).
+
+Observed:
+
+- canonical conversation: `local-chatgpt:fcf9e5bf-8dd4-4615-acb3-bc77fdc2e0ef`;
+- server UUID: `6aa35ae6-0a88-83e8-a9ad-241cf4738865`;
+- lifecycle session: `hs_codex_e52e7de7d679487ab8b156f81cb6747e`;
+- stable task: `chatgpt-codex:local-chatgpt:fcf9e5bf-8dd4-4615-acb3-bc77fdc2e0ef`;
+- turn 1 completed, then reproduced the known native composer detach; exact server-ID recovery restored the same transcript and composer;
+- turn 2 submitted automatically through the hardened QA path and completed normally;
+- both turns independently produced `begin_turn -> pre_api_request -> post_api_request -> on_session_end -> complete_turn`;
+- tool lifecycle events: 0;
+- finalized LCM delta: exactly 4 rows with roles `user, assistant, user, assistant`;
+- rows under the bare server UUID: 0;
+- tool rows: 0;
+- `PRAGMA integrity_check=ok`, FTS count matched messages, foreign-key violations: 0;
+- after app restart, the exact server UUID reopened the original two-turn transcript with a visible composer;
+- read-only reopen produced 0 new lifecycle events and no LCM/tool/server-key mutations.
+
+### E1 conclusion
+
+**E1 is CLOSED/PASS.** The final unattended run proves ordinary no-tool Chat traverses the full Hermes lifecycle on every turn, preserves one logical conversation/session/task through an upstream shell remount, persists the canonical four-message history, and survives restart/exact-server-ID reopen without read-only side effects. Phase C continues with E2/E4/E9 and explicit unrelated-route/Gizmo regression coverage.
