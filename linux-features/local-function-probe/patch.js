@@ -18,6 +18,7 @@ const VIEWER_MARKER = "codexP2ToolViewerRuntime";
 const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
 const COMPLETED_PRESENTATION_V2_MARKER = "codexP2ToolCompletedPresentationV2Runtime";
 const RESULT_PAIR_MARKER = "codexP2ToolResultPairRuntime";
+const RESULT_HANDOFF_V2_MARKER = "codexP2CompletedResultHandoffV2Runtime";
 const EXEC_MARKER = "codexP2ToolExecRuntime";
 
 const ENDPOINT = "http://127.0.0.1:9473/call"; // legacy fallback only; executor now routes via lifecycle IPC
@@ -150,14 +151,38 @@ function replaceBalancedFunctionExactlyOnce(source, startPattern, replacement, l
   throw new Error(`${label}: unterminated structural function`);
 }
 
+function restoreCompletedResultHandoff(source) {
+  const marker = `/*${RESULT_HANDOFF_V2_MARKER}*/`;
+  const legacy = /item:\{\.\.\.([\w$]+)\.item,completed:!0,result:([\w$]+)\.rawPayload,tool:\1\.item\.sourceTool\?\?\1\.item\.tool\}/g;
+  if (source.includes(marker)) {
+    if (source.split(marker).length - 1 !== 1 || [...source.matchAll(legacy)].length !== 0) {
+      throw new Error("completed result handoff V2 marker is malformed or ambiguous");
+    }
+    return source;
+  }
+  const matches = [...source.matchAll(legacy)];
+  if (matches.length === 0) return source;
+  if (matches.length !== 1) {
+    throw new Error(`restore completed result handoff: expected exactly one legacy anchor, found ${matches.length}`);
+  }
+  return source.replace(
+    legacy,
+    (_match, previous, classified) =>
+      `item:{...${previous}.item,completed:!0,result:${classified}.rawPayload,${marker}tool:${previous}.item.tool}`,
+  );
+}
+
 function restoreLocalToolExecutionHandoff(source) {
   const presentationOnly = /sourceTool:([\w$]+)\?([\w$]+):void 0,tool:\2/g;
   const matches = [...source.matchAll(presentationOnly)];
-  if (matches.length === 0) return source;
-  if (matches.length !== 2) {
-    throw new Error(`restore local-tool execution handoff: expected exactly two anchors, found ${matches.length}`);
+  let restored = source;
+  if (matches.length !== 0) {
+    if (matches.length !== 2) {
+      throw new Error(`restore local-tool execution handoff: expected exactly two anchors, found ${matches.length}`);
+    }
+    restored = restored.replace(presentationOnly, "sourceTool:$1?$2:void 0,tool:$1?`handoff`:$2");
   }
-  return source.replace(presentationOnly, "sourceTool:$1?$2:void 0,tool:$1?`handoff`:$2");
+  return restoreCompletedResultHandoff(restored);
 }
 
 function patchInitial(source) {
@@ -223,7 +248,7 @@ function patchInitial(source) {
       const fallback = match.slice(match.indexOf(`${previous}?.item.type===\`mcp-tool-call\``));
       const colon = fallback.lastIndexOf(":null:{item:");
       const tail = fallback.slice(colon);
-      return `function ${fn}(${message},${classified},${previous}){let ${item}=(${classified}.pairKey==null?null:${hostedCombiner}(${message},${previous}))??${classified}.item;return ${item}==null?${classified}.localFunctionResult===!0&&${previous}?.item.type===\`dynamic-tool-call\`?(globalThis.__codexP2ResultAttached=(globalThis.__codexP2ResultAttached??0)+1,globalThis.__codexP2AttachedItem={tool:${previous}.item.sourceTool??${previous}.item.tool,callId:${previous}.item.callId,result:${classified}.rawPayload},{...${previous},item:{...${previous}.item,completed:!0,result:${classified}.rawPayload,tool:${previous}.item.sourceTool??${previous}.item.tool},sourceMessage:${message}}):${fallback.slice(0, colon)}${tail}`;
+      return `function ${fn}(${message},${classified},${previous}){let ${item}=(${classified}.pairKey==null?null:${hostedCombiner}(${message},${previous}))??${classified}.item;return ${item}==null?${classified}.localFunctionResult===!0&&${previous}?.item.type===\`dynamic-tool-call\`?(globalThis.__codexP2ResultAttached=(globalThis.__codexP2ResultAttached??0)+1,globalThis.__codexP2AttachedItem={tool:${previous}.item.sourceTool??${previous}.item.tool,callId:${previous}.item.callId,result:${classified}.rawPayload},{...${previous},item:{...${previous}.item,completed:!0,result:${classified}.rawPayload,/*${RESULT_HANDOFF_V2_MARKER}*/tool:${previous}.item.tool},sourceMessage:${message}}):${fallback.slice(0, colon)}${tail}`;
     },
     "attach marked result to dynamic tool call",
   );

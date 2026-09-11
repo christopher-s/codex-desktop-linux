@@ -53,9 +53,19 @@ test("patchInitial follows 26.901.51231 structures without pinning minified iden
   const patched = assertIdempotent(patchInitial, source);
   assert.match(patched, /codexP2ToolSignatureRuntime/);
   assert.match(patched, /codexP2ToolResultPairRuntime/);
+  assert.match(patched, /codexP2CompletedResultHandoffV2Runtime/);
   assert.match(patched, /codex_local_function_result/);
   assert.match(patched, /sourceTool/);
   assert.match(patched, /local-function:/);
+  assert.match(
+    patched,
+    /completed:!0,result:[\w$]+\.rawPayload,\/\*codexP2CompletedResultHandoffV2Runtime\*\/tool:([\w$]+)\.item\.tool/,
+    "completed paired items keep native handoff viewer identity",
+  );
+  assert.doesNotMatch(
+    patched,
+    /completed:!0,result:[\w$]+\.rawPayload,tool:([\w$]+)\.item\.sourceTool\?\?\1\.item\.tool/,
+  );
   assert.match(
     patched,
     /sourceTool:r\?[\w$]+:void 0,tool:r\?`handoff`:/,
@@ -74,6 +84,22 @@ test("patchInitial follows 26.901.51231 structures without pinning minified iden
     /return [\w$]+\([\w$]+,\{[\s\S]*onServerThreadIdChange:\(\.\.\.__p2ServerArgs\)=>/,
     "wraps the callback only in the downstream submit-call object",
   );
+});
+
+test("patchInitial migrates completed paired items back to native handoff viewer identity", () => {
+  const source = asset("app-initial-");
+  const current = patchInitial(source);
+  const currentPattern = /\/\*codexP2CompletedResultHandoffV2Runtime\*\/tool:([\w$]+)\.item\.tool/;
+  const match = current.match(currentPattern);
+  assert.ok(match, "current patched asset contains completed-result handoff V2 marker");
+  const previous = match[1];
+  const legacy = current.replace(
+    currentPattern,
+    `tool:${previous}.item.sourceTool??${previous}.item.tool`,
+  );
+  assert.notEqual(legacy, current);
+  assert.doesNotMatch(legacy, /codexP2CompletedResultHandoffV2Runtime/);
+  assert.equal(patchInitial(legacy), current);
 });
 
 test("patchInitial restores exactly two presentation-only local tools to native handoff execution identity", () => {
