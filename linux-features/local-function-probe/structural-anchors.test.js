@@ -105,11 +105,12 @@ test("patchInitial fails closed on a partial execution-handoff restoration", () 
   );
 });
 
-test("patchViewer keeps the native executor mounted and suppresses only completed local-tool handoff presentation", () => {
+test("patchViewer keeps the native executor mounted and preserves completed local-tool disclosure", () => {
   const source = asset("viewer-");
   const patched = assertIdempotent(patchViewer, source);
   assert.match(patched, /codexP2ToolViewerRuntime/);
-  assert.match(patched, /codexP2ToolCompletedPresentationRuntime/);
+  assert.match(patched, /codexP2ToolCompletedPresentationV2Runtime/);
+  assert.doesNotMatch(patched, /codexP2ToolCompletedPresentationRuntime/);
   assert.match(
     patched,
     /if\(f\.tool===`handoff`\)\{globalThis\.__codexP2ViewerRouted/,
@@ -119,27 +120,39 @@ test("patchViewer keeps the native executor mounted and suppresses only complete
     patched,
     /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{globalThis\.__codexP2ViewerRouted/,
   );
-  assert.match(
+  assert.doesNotMatch(
     patched,
-    /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null;\/\*codexP2ToolCompletedPresentationRuntime\*\//,
-    "published sourceTool-backed results suppress only the terminal native handoff card",
+    /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null/,
+    "published sourceTool-backed results continue into the native accepted presentation branch",
   );
 });
 
-test("patchViewer migrates the earlier top-level sourceTool bypass back to an executor-mounted post-result suppression", () => {
+test("patchViewer migrates completed-presentation suppression and the older top-level bypass", () => {
   const source = asset("viewer-");
   const current = patchViewer(source);
-  const completedPattern = /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null;\/\*codexP2ToolCompletedPresentationRuntime\*\//;
+  const currentMarker = "/*codexP2ToolCompletedPresentationV2Runtime*/";
+  const acceptedAnchor = /\{conversationId:([\w$]+),item:([\w$]+),onContinueSuccess:[\w$]+,shouldBlockExternalEgress:[\w$]+\}=([\w$]+),[\s\S]{0,2200}?\/\*codexP2ToolCompletedPresentationV2Runtime\*\/if\(!([\w$]+)&&\(([\w$]+)\?\.type===`accepted`\|\|\5\?\.type===`partial`\)\)\{/;
+  const match = current.match(acceptedAnchor);
+  assert.ok(match, "current viewer contains the completed-presentation V2 marker before the native accepted branch");
+  const item = match[2];
+  const result = match[5];
+  const suppressed = current.replace(
+    currentMarker,
+    `if(${item}.sourceTool&&${result}!=null)return null;/*codexP2ToolCompletedPresentationRuntime*/`,
+  );
+  assert.notEqual(suppressed, current);
+  assert.equal(patchViewer(suppressed), current);
+
   const previous = current
     .replace(
       "if(f.tool===`handoff`){globalThis.__codexP2ViewerRouted",
       "if(f.tool===`handoff`&&!f.sourceTool){globalThis.__codexP2ViewerRouted",
     )
-    .replace(completedPattern, "");
+    .replace(currentMarker, "");
   const migrated = patchViewer(previous);
   assert.match(migrated, /if\(f\.tool===`handoff`\)\{globalThis\.__codexP2ViewerRouted/);
   assert.doesNotMatch(migrated, /if\(f\.tool===`handoff`&&!f\.sourceTool\)\{/);
-  assert.match(migrated, /codexP2ToolCompletedPresentationRuntime/);
+  assert.match(migrated, /codexP2ToolCompletedPresentationV2Runtime/);
   assert.equal(patchViewer(migrated), migrated);
 
   const duplicatedBypass = previous.replace(

@@ -16,6 +16,7 @@ const INITIAL_MARKER = "codexP2ToolSignatureRuntime";
 const PRIMARY_MARKER = "codexP2ToolDetectorRuntime";
 const VIEWER_MARKER = "codexP2ToolViewerRuntime";
 const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
+const COMPLETED_PRESENTATION_V2_MARKER = "codexP2ToolCompletedPresentationV2Runtime";
 const RESULT_PAIR_MARKER = "codexP2ToolResultPairRuntime";
 const EXEC_MARKER = "codexP2ToolExecRuntime";
 
@@ -288,13 +289,30 @@ function restoreHandoffViewerExecutionMount(source) {
 }
 
 function patchCompletedLocalToolPresentation(source) {
-  if (source.includes(COMPLETED_PRESENTATION_MARKER)) return source;
+  const v1Marker = `/*${COMPLETED_PRESENTATION_MARKER}*/`;
+  const v2Marker = `/*${COMPLETED_PRESENTATION_V2_MARKER}*/`;
+  if (source.includes(v2Marker)) {
+    if (source.split(v2Marker).length - 1 !== 1 || source.includes(v1Marker)) {
+      throw new Error("completed local-tool presentation V2 marker is malformed or ambiguous");
+    }
+    return source;
+  }
+
+  if (source.includes(v1Marker)) {
+    const suppressed = /if\(([\w$]+)\.sourceTool&&([\w$]+)!=null\)return null;\/\*codexP2ToolCompletedPresentationRuntime\*\//g;
+    const matches = [...source.matchAll(suppressed)];
+    if (matches.length !== 1) {
+      throw new Error(`completed local-tool presentation V1 suppression is malformed or ambiguous: ${matches.length}`);
+    }
+    return source.replace(suppressed, v2Marker);
+  }
+
   return replaceStructuralExactlyOnce(
     source,
     /(\{conversationId:([\w$]+),item:([\w$]+),onContinueSuccess:[\w$]+,shouldBlockExternalEgress:[\w$]+\}=([\w$]+),[\s\S]{0,2200}?)(if\(!([\w$]+)&&\(([\w$]+)\?\.type===`accepted`\|\|\7\?\.type===`partial`\)\)\{)/,
-    (_match, prefix, _conversationId, item, _props, acceptedBranch, _failedPublication, result) =>
-      `${prefix}if(${item}.sourceTool&&${result}!=null)return null;/*${COMPLETED_PRESENTATION_MARKER}*/${acceptedBranch}`,
-    "suppress terminal native handoff presentation after a local-tool result",
+    (_match, prefix, _conversationId, _item, _props, acceptedBranch) =>
+      `${prefix}${v2Marker}${acceptedBranch}`,
+    "preserve terminal native handoff presentation after a local-tool result",
   );
 }
 
