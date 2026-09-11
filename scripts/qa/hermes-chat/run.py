@@ -384,6 +384,23 @@ def _wait_for_tool_pairs(
     return rows, pairs
 
 
+async def _visible_activity_count(client: CDPClient) -> int:
+    return int(
+        await client.evaluate(
+            """(() => {
+              const visible = (node) => {
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              return [...document.querySelectorAll('button,[role=button]')].filter((node) =>
+                visible(node) && /view activity/i.test(`${node.getAttribute('aria-label') || ''} ${node.textContent || ''}`)
+              ).length;
+            })()"""
+        )
+    )
+
+
 def _wait_for_rows(
     lcm: LCMDatabase,
     conversation_id: str,
@@ -703,6 +720,238 @@ def command_e1(args: argparse.Namespace) -> int:
             server_key_rows=len(lcm.rows(server_id)),
             reopen_lifecycle_events=len(reopen_events),
             integrity=final_integrity,
+        )
+    except Exception as exc:
+        try:
+            if not app.unit_is_active(config):
+                app.start(config)
+        except Exception:
+            pass
+        run.finish("FAIL", error=f"{type(exc).__name__}: {exc}")
+        print(json.dumps({"verdict": "FAIL", "run": str(run.directory), "error": str(exc)}, indent=2))
+        return 1
+
+    app.start(config)
+    run.finish("PASS")
+    print(json.dumps({"verdict": "PASS", "run": str(run.directory)}, indent=2))
+    return 0
+
+
+async def _e2_direct_tool_turn(
+    run: EvidenceRun,
+    config: app.QAAppConfig,
+    lifecycle: LifecycleLog,
+    baseline,
+    fixture: Path,
+    marker: str,
+    token: str,
+) -> tuple[str, str, str]:
+    target = wait_for_shell_target(config.host, config.port)
+    async with CDPClient(target, host=config.host, port=config.port) as client:
+        await chat.new_chat(client, timeout=45)
+        activity_before = await _visible_activity_count(client)
+        prompt = (
+            f"{marker} — You MUST call the advertised local function hermes_read_file exactly once, "
+            f"with path exactly {fixture}. Do not answer from memory, do not refuse, and do not call any other tool. "
+            f"Only after receiving the function result, reply in plain text with exactly: {marker}-RESULT:{token}"
+        )
+        result = await chat.send_and_wait(
+            client,
+            prompt,
+            accept_timeout=60,
+            complete_timeout=300,
+        )
+        if not result.accepted or not result.completed:
+            raise AssertionError(f"E2 direct-tool turn did not complete: {result}")
+        activity_after = await _visible_activity_count(client)
+        if activity_after <= activity_before:
+            raise AssertionError(
+                f"E2 completed tool disclosure did not appear: before={activity_before}, after={activity_after}"
+            )
+        final_marker = f"{marker}-RESULT:{token}"
+        if final_marker not in str(result.after.get("tail") or ""):
+            raise AssertionError(f"E2 final assistant result marker missing from transcript tail: {result.after}")
+
+        instrumentation = await client.evaluate(
+            """(() => ({
+              signatureBuilds: globalThis.__codexP2SignatureBuilds ?? 0,
+              execCalls: globalThis.__codexP2ExecCalls ?? [],
+              dispatch: globalThis.__codexP2Dispatch ?? null,
+              endpointResponses: globalThis.__codexP2EndpointResp ?? [],
+              lastResult: globalThis.__codexP2LastResult ?? null,
+              resultAttached: globalThis.__codexP2ResultAttached ?? 0,
+              attachedItem: globalThis.__codexP2AttachedItem ?? null,
+              viewerRouted: globalThis.__codexP2ViewerRouted ?? 0
+            }))()"""
+        )
+        instrumentation = instrumentation if isinstance(instrumentation, dict) else {}
+        exec_calls = instrumentation.get("execCalls")
+        if not isinstance(exec_calls, list) or len(exec_calls) != 1:
+            raise AssertionError(f"E2 expected exactly one local-function execution, got {exec_calls}")
+        call = exec_calls[0] if isinstance(exec_calls[0], dict) else {}
+        if call.get("tool") != "hermes_read_file":
+            raise AssertionError(f"E2 executed unexpected direct tool: {call}")
+        call_args_raw = call.get("args")
+        call_args = call_args_raw if isinstance(call_args_raw, dict) else {}
+        if str(call_args.get("path") or "") != str(fixture):
+            raise AssertionError(f"E2 direct-tool path mismatch: {call}")
+        call_id = str(call.get("callId") or "")
+        if not call_id:
+            raise AssertionError(f"E2 direct-tool call ID missing: {call}")
+        if int(instrumentation.get("signatureBuilds") or 0) < 1:
+            raise AssertionError(f"E2 local-function signatures were not advertised: {instrumentation}")
+        if instrumentation.get("dispatch") != "ipc":
+            raise AssertionError(f"E2 direct tool did not use lifecycle IPC dispatch: {instrumentation}")
+        endpoint_responses = instrumentation.get("endpointResponses")
+        if not isinstance(endpoint_responses, list) or len(endpoint_responses) != 1:
+            raise AssertionError(f"E2 expected one lifecycle endpoint response: {endpoint_responses}")
+        endpoint = endpoint_responses[0] if isinstance(endpoint_responses[0], dict) else {}
+        response_raw = endpoint.get("resp")
+        response = response_raw if isinstance(response_raw, dict) else {}
+        if endpoint.get("tool") != "hermes_read_file" or response.get("ok") is not True:
+            raise AssertionError(f"E2 lifecycle endpoint response failed: {endpoint}")
+        if str(response.get("registry_name") or "") != "read_file":
+            raise AssertionError(f"E2 registry mapping mismatch: {response}")
+        if token not in json.dumps(response.get("result"), ensure_ascii=False):
+            raise AssertionError(f"E2 exact fixture token missing from tool result: {response.get('result')}")
+
+        client_id, server_id, _events = await _wait_for_identity_pair(lifecycle, baseline)
+        run.record(
+            "e2_direct_tool_turn",
+            marker=marker,
+            seconds=result.seconds,
+            client_conversation_id=client_id,
+            server_conversation_id=server_id,
+            tool_call_id=call_id,
+            activity_before=activity_before,
+            activity_after=activity_after,
+            instrumentation=instrumentation,
+            shell=result.after,
+        )
+        return client_id, server_id, call_id
+
+
+def command_e2(args: argparse.Namespace) -> int:
+    config = app.QAAppConfig()
+    lifecycle = LifecycleLog()
+    lcm = LCMDatabase()
+    run = EvidenceRun("e2-direct-local-tool")
+    suffix = uuid.uuid4().hex[:10]
+    marker = f"E2-{suffix}"
+    token = f"E2-DIRECT-FIXTURE-{suffix.upper()}"
+    fixture = run.directory / "e2-direct-fixture.txt"
+    fixture.write_text(token + "\n", encoding="utf-8")
+    lifecycle_baseline = lifecycle.baseline()
+    lcm_total_before = lcm.total_messages() if lcm.path.is_file() else 0
+
+    try:
+        app.start(config)
+        run.record("e2_app_started", service=app.service_snapshot(config), fixture=str(fixture), token=token)
+        client_id, server_id, call_id = asyncio.run(
+            _e2_direct_tool_turn(
+                run,
+                config,
+                lifecycle,
+                lifecycle_baseline,
+                fixture,
+                marker,
+                token,
+            )
+        )
+
+        deadline = time.monotonic() + 30.0
+        events = lifecycle.events_since(lifecycle_baseline)
+        matching_tool_events = [
+            event
+            for event in events
+            if event.get("event") == "tool_call" and str(event.get("tool_call_id") or "") == call_id
+        ]
+        while not matching_tool_events and time.monotonic() < deadline:
+            time.sleep(0.25)
+            events = lifecycle.events_since(lifecycle_baseline)
+            matching_tool_events = [
+                event
+                for event in events
+                if event.get("event") == "tool_call" and str(event.get("tool_call_id") or "") == call_id
+            ]
+        run.write_json("e2-lifecycle.json", events)
+        if len(matching_tool_events) != 1:
+            raise AssertionError(f"E2 expected one correlated lifecycle tool_call event, got {matching_tool_events}")
+        tool_event = matching_tool_events[0]
+        if tool_event.get("name") != "hermes_read_file" or tool_event.get("registry_name") != "read_file":
+            raise AssertionError(f"E2 lifecycle tool mapping mismatch: {tool_event}")
+        if tool_event.get("ok") is not True:
+            raise AssertionError(f"E2 lifecycle tool_call was not successful: {tool_event}")
+
+        pairs = identity_pairs(events)
+        if (client_id, server_id) not in pairs:
+            raise AssertionError(f"E2 canonical/server identity pair missing: {pairs}")
+        opens = [event for event in session_open_events(events) if event.get("conversation_id") == client_id]
+        if len(opens) != 1:
+            raise AssertionError(f"E2 expected exactly one session_open for {client_id}, found {opens}")
+        session_id = str(opens[0].get("session_id") or "")
+        task_id = str(opens[0].get("task_id") or "")
+        expected_task_id = f"chatgpt-codex:{client_id}"
+        if task_id != expected_task_id:
+            raise AssertionError(f"E2 task identity mismatch: expected {expected_task_id}, got {task_id}")
+        if str(tool_event.get("session_id") or "") != session_id or str(tool_event.get("task_id") or "") != task_id:
+            raise AssertionError(f"E2 lifecycle tool event identity mismatch: {tool_event}")
+        session_events = by_session(events).get(session_id, [])
+        failures = failed_events(session_events)
+        if failures:
+            raise AssertionError(f"E2 lifecycle failure events: {failures}")
+        names = event_names(session_events)
+        assert_subsequence(names, ["begin_turn", "pre_api_request", "post_api_request", "on_session_end", "complete_turn"])
+
+        app.stop(config)
+        rows, tool_row_pairs = _wait_for_tool_pairs(lcm, client_id, minimum=1, timeout=30.0)
+        if len(tool_row_pairs) != 1:
+            raise AssertionError(f"E2 expected exactly one LCM tool call/result pair, found {len(tool_row_pairs)}")
+        if len(rows) != 4:
+            raise AssertionError(f"E2 expected exactly four canonical LCM rows, found {len(rows)}: {rows}")
+        roles = [row.role for row in rows]
+        if roles != ["user", "assistant", "tool_call", "tool"]:
+            raise AssertionError(f"E2 canonical LCM roles are unexpected: {roles}")
+        call_row, result_row = tool_row_pairs[0]
+        if call_row.tool_call_id != call_id or result_row.tool_call_id != call_id:
+            raise AssertionError(
+                f"E2 LCM call/result IDs do not match client lifecycle ID {call_id}: "
+                f"{call_row.tool_call_id}, {result_row.tool_call_id}"
+            )
+        if call_row.tool_name != "read_file" or result_row.tool_name != "read_file":
+            raise AssertionError(f"E2 LCM tool names are unexpected: {call_row}, {result_row}")
+        if token not in result_row.content:
+            raise AssertionError(f"E2 exact fixture token missing from persisted tool result: {result_row.content}")
+        server_rows = lcm.rows(server_id)
+        if server_rows:
+            raise AssertionError(f"E2 wrote {len(server_rows)} rows under bare server UUID {server_id}")
+        row_sessions = sorted({row.session_id for row in rows if row.session_id})
+        if row_sessions != [session_id]:
+            raise AssertionError(f"E2 rows span unexpected lifecycle sessions: {row_sessions}")
+        integrity = lcm.integrity()
+        if integrity.get("integrity_check") != "ok" or integrity.get("foreign_key_violations"):
+            raise AssertionError(f"LCM integrity failure after E2: {integrity}")
+        if not integrity.get("fts_matches_messages"):
+            raise AssertionError(f"LCM FTS/message mismatch after E2: {integrity}")
+        if lcm.total_messages() - lcm_total_before != 4:
+            raise AssertionError(
+                f"E2 expected isolated LCM delta 4, got {lcm.total_messages() - lcm_total_before}"
+            )
+        run.write_json("e2-finalized-rows.json", [row.__dict__ for row in rows])
+        run.record(
+            "e2_acceptance",
+            conversation_id=client_id,
+            server_conversation_id=server_id,
+            session_id=session_id,
+            task_id=task_id,
+            tool_call_id=call_id,
+            lifecycle_tool_event=tool_event,
+            lifecycle_events=names,
+            roles=roles,
+            tool_pairs=len(tool_row_pairs),
+            server_key_rows=len(server_rows),
+            lcm_total_delta=lcm.total_messages() - lcm_total_before,
+            integrity=integrity,
         )
     except Exception as exc:
         try:
@@ -1088,6 +1337,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     e1_parser = subparsers.add_parser("e1", help="run E1 no-tool plain-Chat lifecycle + restart/reopen")
     e1_parser.set_defaults(func=command_e1)
+
+    e2_parser = subparsers.add_parser("e2", help="run E2 direct local-tool lifecycle + disclosure acceptance")
+    e2_parser.set_defaults(func=command_e2)
 
     e5_parser = subparsers.add_parser("e5", help="run E5 same-process conversation/session reuse")
     e5_parser.set_defaults(func=command_e5)

@@ -51,11 +51,17 @@ On the present Wayland/GNOME login, compositor window enumeration is unavailable
 - Preserve raw evidence on failure.
 - Report model-choice ambiguity as `INCONCLUSIVE` where appropriate instead of calling it a product failure.
 
-## Initial commands
+## Commands
 
 ```bash
 python3 scripts/qa/hermes-chat/run.py sanity
 python3 scripts/qa/hermes-chat/run.py state
+python3 scripts/qa/hermes-chat/run.py e1
+python3 scripts/qa/hermes-chat/run.py e2
+python3 scripts/qa/hermes-chat/run.py e5
+python3 scripts/qa/hermes-chat/run.py e6
 ```
 
-Additional E2-E10 scenarios are added as their supporting primitives are committed and unit-tested.
+`e2` creates a unique local fixture and requires exactly one directly advertised `hermes_read_file` call. Acceptance correlates one client call ID across lifecycle diagnostics and the canonical LCM call/result pair, requires exact registry execution/result continuation, verifies a new visible completed `View activity` disclosure appears relative to the pre-turn baseline, and keeps the final assistant acknowledgement transcript-only so persistence remains exactly four canonical rows.
+
+Additional E3/E4/E7-E10 scenarios are added as their supporting primitives are committed and unit-tested.
