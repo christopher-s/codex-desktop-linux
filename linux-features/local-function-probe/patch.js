@@ -16,6 +16,7 @@ const INITIAL_MARKER = "codexP2ToolSignatureRuntime";
 const PRIMARY_MARKER = "codexP2ToolDetectorRuntime";
 const VIEWER_MARKER = "codexP2ToolViewerRuntime";
 const VIEWER_SNAPSHOT_V2_MARKER = "codexP2LmSnapshotV2Runtime";
+const COMPLETED_RESULT_REHYDRATE_V1_MARKER = "codexP2CompletedResultRehydrateV1Runtime";
 const COMPLETED_PRESENTATION_MARKER = "codexP2ToolCompletedPresentationRuntime";
 const COMPLETED_PRESENTATION_V2_MARKER = "codexP2ToolCompletedPresentationV2Runtime";
 const COMPLETED_SOURCE_TOOL_CARD_V1_MARKER = "codexP2CompletedSourceToolCardV1Runtime";
@@ -406,6 +407,31 @@ function upgradeViewerSnapshotInstrumentation(source) {
   return source.replace(legacy, (_match, item) => viewerSnapshotPayload(item));
 }
 
+function patchCompletedResultRehydration(source) {
+  const marker = `/*${COMPLETED_RESULT_REHYDRATE_V1_MARKER}*/`;
+  const current = /if\(([\w$]+)\.sourceTool&&\1\.callId\)\{let codexP2CompletedResultMap=globalThis\.__codexP2CompletedResultMap\?\?\(globalThis\.__codexP2CompletedResultMap=new Map\);if\(\1\.completed&&\1\.result\)\{codexP2CompletedResultMap\.set\(\1\.callId,\1\.result\);while\(codexP2CompletedResultMap\.size>100\)codexP2CompletedResultMap\.delete\(codexP2CompletedResultMap\.keys\(\)\.next\(\)\.value\)\}else if\(!\1\.completed&&codexP2CompletedResultMap\.has\(\1\.callId\)\)\1=\{\.\.\.\1,completed:!0,result:codexP2CompletedResultMap\.get\(\1\.callId\)\}\}\/\*codexP2CompletedResultRehydrateV1Runtime\*\//g;
+  if (source.includes(marker)) {
+    const matches = [...source.matchAll(current)];
+    if (source.split(marker).length - 1 !== 1 || matches.length !== 1) {
+      throw new Error("completed-result rehydration V1 marker is malformed or ambiguous");
+    }
+    return source;
+  }
+
+  const snapshotMarker = `/*${VIEWER_SNAPSHOT_V2_MARKER}*/`;
+  if (source.split(snapshotMarker).length - 1 !== 1) {
+    throw new Error("completed-result rehydration requires exactly one viewer snapshot V2 marker");
+  }
+  const snapshot = /if\(([\w$]+)\.sourceTool\|\|\1\.tool===`handoff`\)\{let codexP2LmSnapshot=/g;
+  const matches = [...source.matchAll(snapshot)];
+  if (matches.length !== 1) {
+    throw new Error(`completed-result rehydration snapshot anchor is ambiguous: ${matches.length}`);
+  }
+  const item = matches[0][1];
+  const payload = `if(${item}.sourceTool&&${item}.callId){let codexP2CompletedResultMap=globalThis.__codexP2CompletedResultMap??(globalThis.__codexP2CompletedResultMap=new Map);if(${item}.completed&&${item}.result){codexP2CompletedResultMap.set(${item}.callId,${item}.result);while(codexP2CompletedResultMap.size>100)codexP2CompletedResultMap.delete(codexP2CompletedResultMap.keys().next().value)}else if(!${item}.completed&&codexP2CompletedResultMap.has(${item}.callId))${item}={...${item},completed:!0,result:codexP2CompletedResultMap.get(${item}.callId)}}${marker}`;
+  return source.replace(matches[0][0], payload + matches[0][0]);
+}
+
 function patchViewer(source) {
   let out = restoreHandoffViewerExecutionMount(source);
   out = upgradeViewerSnapshotInstrumentation(out);
@@ -417,6 +443,7 @@ function patchViewer(source) {
       "instrument native handoff viewer while preserving executor mount",
     );
   }
+  out = patchCompletedResultRehydration(out);
   out = patchCompletedLocalToolPresentation(out);
   out = patchCompletedSourceToolCard(out);
   return patchSourceToolActivityVisibility(out);

@@ -102,3 +102,8 @@ Instrumentation is namespaced `__codexP2*` (`__codexP2ExecCalls`,
 verified without retaining unbounded renderer history. `LmSnapshotV2` gives
 that observer an explicit migration marker so previously patched viewers
 upgrade instead of treating the older single-value `__codexP2LmItem` probe as current.
+The final Chat remount can transiently rehydrate the original pending dynamic item after
+multiple completed snapshots for the same `callId`. `CompletedResultRehydrateV1` keeps a
+bounded 100-entry accepted-result cache keyed by `callId`; a later stale pending copy of the
+same `sourceTool` item is promoted back to `completed:true` with its accepted result before
+snapshotting and native viewer routing, preserving one call identity and one completed card.

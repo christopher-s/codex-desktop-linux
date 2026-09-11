@@ -136,6 +136,12 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
   const patched = assertIdempotent(patchViewer, source);
   assert.match(patched, /codexP2ToolViewerRuntime/);
   assert.match(patched, /__codexP2LmItems=\[\.\.\.\(globalThis\.__codexP2LmItems\?\?\[\]\),codexP2LmSnapshot\]\.slice\(-40\)\}\/\*codexP2LmSnapshotV2Runtime\*\//);
+  assert.match(patched, /codexP2CompletedResultRehydrateV1Runtime/);
+  assert.match(
+    patched,
+    /if\(([\w$]+)\.sourceTool&&\1\.callId\)\{let codexP2CompletedResultMap=globalThis\.__codexP2CompletedResultMap\?\?\(globalThis\.__codexP2CompletedResultMap=new Map\);if\(\1\.completed&&\1\.result\)\{codexP2CompletedResultMap\.set\(\1\.callId,\1\.result\);while\(codexP2CompletedResultMap\.size>100\)codexP2CompletedResultMap\.delete\(codexP2CompletedResultMap\.keys\(\)\.next\(\)\.value\)\}else if\(!\1\.completed&&codexP2CompletedResultMap\.has\(\1\.callId\)\)\1=\{\.\.\.\1,completed:!0,result:codexP2CompletedResultMap\.get\(\1\.callId\)\}\}\/\*codexP2CompletedResultRehydrateV1Runtime\*\//,
+    "stale pending copies rehydrate from the bounded completed-result cache before rendering",
+  );
   assert.match(patched, /codexP2ToolCompletedPresentationV2Runtime/);
   assert.match(patched, /codexP2CompletedSourceToolCardV1Runtime/);
   assert.match(patched, /codexLinuxChatBridgeToolCallsSkipRuntime/);
@@ -164,6 +170,17 @@ test("patchViewer keeps the native executor mounted and preserves completed loca
     /if\([\w$]+\.sourceTool&&[\w$]+!=null\)return null/,
     "published sourceTool-backed results continue into the native accepted presentation branch",
   );
+});
+
+test("patchViewer migrates an installed viewer to rehydrate stale pending sourceTool items", () => {
+  const source = asset("viewer-");
+  const current = patchViewer(source);
+  const rehydratePattern = /if\(([\w$]+)\.sourceTool&&\1\.callId\)\{let codexP2CompletedResultMap=globalThis\.__codexP2CompletedResultMap\?\?\(globalThis\.__codexP2CompletedResultMap=new Map\);if\(\1\.completed&&\1\.result\)\{codexP2CompletedResultMap\.set\(\1\.callId,\1\.result\);while\(codexP2CompletedResultMap\.size>100\)codexP2CompletedResultMap\.delete\(codexP2CompletedResultMap\.keys\(\)\.next\(\)\.value\)\}else if\(!\1\.completed&&codexP2CompletedResultMap\.has\(\1\.callId\)\)\1=\{\.\.\.\1,completed:!0,result:codexP2CompletedResultMap\.get\(\1\.callId\)\}\}\/\*codexP2CompletedResultRehydrateV1Runtime\*\//;
+  assert.match(current, rehydratePattern);
+  const previous = current.replace(rehydratePattern, "");
+  assert.notEqual(previous, current);
+  assert.doesNotMatch(previous, /codexP2CompletedResultRehydrateV1Runtime/);
+  assert.equal(patchViewer(previous), current);
 });
 
 test("patchViewer migrates installed viewer instrumentation to bounded handoff snapshots", () => {
