@@ -293,8 +293,7 @@ async def send_and_wait(
             accepted = True
             break
         if not send_fallback_attempted and _needs_send_fallback(before, last):
-            send_fallback_attempted = True
-            await click_visible_control(client, ["Send", "Send message"])
+            send_fallback_attempted = await click_visible_control(client, ["Send", "Send message"])
         await dismiss_stay_in_chat(client)
     if not accepted:
         return TurnResult(False, False, 0.0, before, last)
