@@ -415,6 +415,8 @@ async def _e1_two_turns(
     marker_two: str,
 ) -> tuple[str, str]:
     target = wait_for_shell_target(config.host, config.port)
+    client_id = ""
+    server_id = ""
     async with CDPClient(target, host=config.host, port=config.port) as client:
         await chat.new_chat(client, timeout=45)
         for logical_turn, marker_value in enumerate((marker_one, marker_two), start=1):
@@ -439,17 +441,65 @@ async def _e1_two_turns(
                 raise AssertionError(
                     f"E1 turn {logical_turn} unexpectedly executed a tool: {new_tools}"
                 )
-            shell = await chat.wait_for_visible_composer(client, timeout=45)
+
+            observed_client_id, observed_server_id, _events = await _wait_for_identity_pair(
+                lifecycle,
+                baseline,
+            )
+            if client_id and observed_client_id != client_id:
+                raise AssertionError(
+                    f"E1 client conversation rotated inside two-turn scenario: {client_id} -> {observed_client_id}"
+                )
+            if server_id and observed_server_id != server_id:
+                raise AssertionError(
+                    f"E1 server conversation rotated inside two-turn scenario: {server_id} -> {observed_server_id}"
+                )
+            client_id = observed_client_id
+            server_id = observed_server_id
+
+            shell_recovered = False
+            try:
+                shell = await chat.wait_for_visible_composer(client, timeout=8)
+            except Exception:
+                detached_shell = await chat.state(client)
+                run.record(
+                    "e1_shell_detached",
+                    logical_turn=logical_turn,
+                    marker=marker_value,
+                    server_conversation_id=server_id,
+                    shell=detached_shell,
+                )
+                await chat.new_chat(client, timeout=45)
+                row = await recents.open_by_server_id(
+                    client,
+                    server_id,
+                    transcript_marker=marker_value,
+                    timeout=180,
+                )
+                shell = await chat.wait_for_visible_composer(client, timeout=45)
+                shell_recovered = True
+                run.record(
+                    "e1_shell_recovered",
+                    logical_turn=logical_turn,
+                    marker=marker_value,
+                    server_conversation_id=server_id,
+                    row=row,
+                    shell=shell,
+                )
+
             run.record(
                 "e1_turn",
                 logical_turn=logical_turn,
                 marker=marker_value,
                 seconds=result.seconds,
                 shell=shell,
+                shell_recovered=shell_recovered,
             )
 
-    client_id, server_id, events = await _wait_for_identity_pair(lifecycle, baseline)
+    events = lifecycle.events_since(baseline)
     run.write_json("e1-live-lifecycle.json", events)
+    if not client_id or not server_id:
+        raise AssertionError("E1 completed two turns without resolving a client/server identity pair")
     return client_id, server_id
 
 
