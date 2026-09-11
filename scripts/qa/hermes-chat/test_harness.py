@@ -17,7 +17,7 @@ if str(HERE) not in sys.path:
 
 from app import QAAppConfig, launch_arguments, sh_quote, transient_environment_args
 from cdp_client import CDPError, CDPTarget, select_shell_target
-from chat import _draft_expression
+from chat import _draft_expression, _needs_send_fallback
 from lifecycle import identity_pairs
 from lcm import LCMDatabase, assert_prefix_unchanged, tool_pairs
 
@@ -52,6 +52,13 @@ class PromptEncodingTests(unittest.TestCase):
         self.assertIn("TextDecoder('utf-8')", expression)
         self.assertIn("atob", expression)
         self.assertIn("document.execCommand('insertText'", expression)
+
+    def test_send_fallback_only_applies_to_an_unsubmitted_populated_draft(self) -> None:
+        before = {"you": 1, "composerLength": 0}
+        self.assertTrue(_needs_send_fallback(before, {"you": 1, "composerLength": 42}))
+        self.assertFalse(_needs_send_fallback(before, {"you": 2, "composerLength": 0}))
+        self.assertFalse(_needs_send_fallback(before, {"you": 1, "composerLength": 0}))
+        self.assertFalse(_needs_send_fallback(before, {"you": 1, "composerLength": -1}))
 
 
 class LifecycleTests(unittest.TestCase):

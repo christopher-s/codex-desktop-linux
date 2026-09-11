@@ -263,6 +263,13 @@ async def dismiss_stay_in_chat(client: CDPClient) -> bool:
     return clicked
 
 
+def _needs_send_fallback(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    return (
+        int(after.get("you", 0)) <= int(before.get("you", 0))
+        and int(after.get("composerLength", -1)) > 0
+    )
+
+
 async def send_and_wait(
     client: CDPClient,
     prompt: str,
@@ -277,6 +284,7 @@ async def send_and_wait(
 
     accept_deadline = time.monotonic() + accept_timeout
     accepted = False
+    send_fallback_attempted = False
     last = before
     while time.monotonic() < accept_deadline:
         await asyncio.sleep(min(1.5, poll_interval))
@@ -284,6 +292,9 @@ async def send_and_wait(
         if last.get("you", 0) > before.get("you", 0) or await visible_text_present(client, prompt):
             accepted = True
             break
+        if not send_fallback_attempted and _needs_send_fallback(before, last):
+            send_fallback_attempted = True
+            await click_visible_control(client, ["Send", "Send message"])
         await dismiss_stay_in_chat(client)
     if not accepted:
         return TurnResult(False, False, 0.0, before, last)
